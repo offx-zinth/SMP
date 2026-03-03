@@ -69,30 +69,30 @@ export class SMPProtocolHandler {
           
         // Structural Queries
         case 'smp/navigate':
-          result = this.queryEngine.navigate(params as NavigateQuery);
+          result = this.queryEngine.navigate(params as unknown as NavigateQuery);
           break;
           
         case 'smp/trace':
-          result = this.queryEngine.trace(params as TraceQuery);
+          result = this.queryEngine.trace(params as unknown as TraceQuery);
           break;
           
         // Context Queries
         case 'smp/context':
-          result = this.queryEngine.context(params as ContextQuery);
+          result = this.queryEngine.context(params as unknown as ContextQuery);
           break;
           
         case 'smp/impact':
-          result = this.queryEngine.impact(params as ImpactQuery);
+          result = this.queryEngine.impact(params as unknown as ImpactQuery);
           break;
           
         // Semantic Search
         case 'smp/locate':
-          result = this.queryEngine.locate(params as LocateQuery);
+          result = this.queryEngine.locate(params as unknown as LocateQuery);
           break;
           
         // Flow Analysis
         case 'smp/flow':
-          result = this.queryEngine.flow(params as FlowQuery);
+          result = this.queryEngine.flow(params as unknown as FlowQuery);
           break;
           
         // Graph Operations
