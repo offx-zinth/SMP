@@ -475,7 +475,7 @@ function parsePython(content: string, filePath: string): ParsedFile {
       type: 'class_declaration',
       name: className,
       start_line: lineNum,
-      end_line,
+      end_line: endLine,
       docstring,
       modifiers: [],
       methods,

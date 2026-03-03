@@ -19,8 +19,8 @@ import {
   FlowResult,
   RelationshipType,
 } from '../types';
-import { MemoryStore } from './store';
-import { GraphEdge } from './graph-builder';
+import { MemoryStore } from '../core/store';
+import { GraphEdge } from '../core/graph-builder';
 
 // ============================================================================
 // Query Engine
@@ -84,7 +84,8 @@ export class QueryEngine {
       return { root: start_id, tree: {}, depth: 0 };
     }
     
-    const tree = this.buildTraceTree(start_id, relationship_type, direction, depth, new Set());
+    const traceDirection = direction === 'both' ? 'outgoing' : direction;
+    const tree = this.buildTraceTree(start_id, relationship_type, traceDirection, depth, new Set());
     
     return {
       root: startNode.structural.name,
@@ -385,13 +386,13 @@ export class QueryEngine {
       .toLowerCase()
       .replace(/[^a-z\s]/g, ' ')
       .split(/\s+/)
-      .filter(w => w.length > 2);
+      .filter((w: string) => w.length > 2);
     
     // Search using keywords
     const matches = this.store.vectors.findByKeywords(keywords, this.store.graph, top_k);
     
     return {
-      matches: matches.map(m => ({
+      matches: matches.map((m) => ({
         entity: m.node,
         relevance: m.score,
         highlight: m.node.semantic?.purpose,
