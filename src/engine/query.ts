@@ -19,8 +19,8 @@ import {
   FlowResult,
   RelationshipType,
 } from '../types';
-import { MemoryStore } from './store';
-import { GraphEdge } from './graph-builder';
+import { MemoryStore } from '../core/store';
+import { GraphEdge } from '../core/graph-builder';
 
 // ============================================================================
 // Query Engine
@@ -78,13 +78,14 @@ export class QueryEngine {
    */
   trace(query: TraceQuery): TraceResult {
     const { start_id, relationship_type, depth = 3, direction = 'outgoing' } = query;
+    const traceDirection = direction === 'both' ? 'outgoing' : direction;
     
     const startNode = this.store.graph.getNode(start_id);
     if (!startNode) {
       return { root: start_id, tree: {}, depth: 0 };
     }
     
-    const tree = this.buildTraceTree(start_id, relationship_type, direction, depth, new Set());
+    const tree = this.buildTraceTree(start_id, relationship_type, traceDirection, depth, new Set());
     
     return {
       root: startNode.structural.name,

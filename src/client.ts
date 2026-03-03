@@ -22,8 +22,8 @@ import {
   LocateResult,
   FlowResult,
   GraphStats,
-  GraphEdge,
-} from '../types';
+} from './types';
+import { GraphEdge } from './core/graph-builder';
 
 export interface SMPClientConfig {
   baseUrl: string;

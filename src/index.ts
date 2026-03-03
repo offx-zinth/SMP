@@ -8,7 +8,7 @@ export * from './types';
 
 // Core modules
 export { parseFile, parseFiles, detectLanguage, generateNodeId } from './core/parser';
-export { buildGraph, mergeGraph } from './core/graph-builder';
+export { buildGraph, mergeGraphs } from './core/graph-builder';
 export { enrichNode, enrichNodes, batchEnrich } from './core/enricher';
 export { 
   MemoryStore, 

@@ -135,8 +135,8 @@ function createSMPNode(
       start_line: parsedNode.start_line,
       end_line: parsedNode.end_line,
     },
-    modifiers: parsedNode.modifiers,
-    docstring: parsedNode.docstring,
+    modifiers: 'modifiers' in parsedNode ? parsedNode.modifiers : undefined,
+    docstring: 'docstring' in parsedNode ? parsedNode.docstring : undefined,
     metrics,
   };
   
