@@ -609,3 +609,24 @@ All tests passed successfully. The Structural Memory Protocol (SMP) implementati
 2. Implement vector embeddings for better semantic search
 3. Add LLM-based enrichment for deeper understanding
 4. Implement incremental updates for large codebases
+
+---
+
+## Automated Unit Test Run (Codex)
+
+**Command:** `npm test`  
+**Framework:** Node.js test runner via `tsx --test`
+
+### Cases Added
+- `test/parser.test.ts`
+  - detectLanguage infers file type from extension
+  - generateNodeId normalizes file path
+  - parseFile extracts imports, exports, functions and classes
+- `test/protocol-handler.test.ts`
+  - smp/update indexes nodes and smp/status reports totals
+  - smp/navigate and smp/impact return indexed relationships
+
+### Result
+- ✅ 5 passed
+- ❌ 0 failed
+- ⏱️ Duration: ~1.8s

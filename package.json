@@ -4,10 +4,11 @@
   "description": "A framework for giving AI agents structural understanding of codebases",
   "main": "src/lib/smp/index.ts",
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "lint": "eslint .",
-    "test": "echo \"Run tests with your test framework\""
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc --noEmit -p tsconfig.json",
+    "test": "tsx --test test/**/*.test.ts",
+    "test:watch": "tsx --test --watch test/**/*.test.ts"
   },
   "dependencies": {
     "next": "^15.0.0",
@@ -20,6 +21,7 @@
     "@types/react": "^18.0.0",
     "@types/react-dom": "^18.0.0",
     "eslint": "^8.0.0",
+    "tsx": "^4.21.0",
     "typescript": "^5.0.0"
   },
   "keywords": [
