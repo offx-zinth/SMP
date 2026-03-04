@@ -1,13 +1,11 @@
 export default function HomePage() {
   return (
     <main style={{ fontFamily: 'Inter, Arial, sans-serif', padding: '2rem', lineHeight: 1.6 }}>
-      <h1>Structural Memory Protocol (SMP)</h1>
-      <p>
-        SMP is running. Use the API endpoints to index files and issue JSON-RPC queries.
-      </p>
+      <h1>VibeCoder Control Plane</h1>
+      <p>Frontend is configured as a thin client for the FastAPI backend.</p>
       <ul>
-        <li><code>GET /api/smp/init</code> - load sample files into memory</li>
-        <li><code>POST /api/smp</code> - send JSON-RPC requests</li>
+        <li><code>POST /api/smp</code> - proxy SMP query calls to FastAPI <code>/smp/query</code></li>
+        <li><code>POST /api/smp/init</code> - proxy workspace initialization to FastAPI <code>/workspace/init</code></li>
       </ul>
     </main>
   );
