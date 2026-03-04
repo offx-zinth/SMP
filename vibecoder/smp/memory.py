@@ -9,6 +9,7 @@ from typing import Any, Iterable
 import chromadb
 import networkx as nx
 from google import genai
+from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_exponential
 
 from vibecoder.smp.parser import ParsedNode
 
@@ -92,10 +93,7 @@ class SMPMemory:
                     f"Entity name: {attrs.get('name', '')}\n"
                     f"Source:\n{raw_text}"
                 )
-                response = self._genai_client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
-                )
+                response = self._generate_content_with_backoff(prompt)
                 summary = (response.text or "").strip()
                 if not summary:
                     continue
@@ -116,6 +114,33 @@ class SMPMemory:
 
         self.save_graph()
         return enriched
+
+    def _generate_content_with_backoff(self, prompt: str) -> Any:
+        for attempt in Retrying(
+            retry=retry_if_exception(self._is_gemini_rate_limit_error),
+            wait=wait_exponential(multiplier=1, min=1, max=30),
+            stop=stop_after_attempt(6),
+            reraise=True,
+        ):
+            with attempt:
+                return self._genai_client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                )
+        raise RuntimeError("Gemini response retry loop exited unexpectedly.")
+
+    @staticmethod
+    def _is_gemini_rate_limit_error(exc: BaseException) -> bool:
+        status_candidates = [
+            getattr(exc, "status_code", None),
+            getattr(exc, "code", None),
+            getattr(exc, "http_status", None),
+        ]
+        if any(str(status) == "429" for status in status_candidates if status is not None):
+            return True
+
+        message = str(exc).lower()
+        return "429" in message or "rate limit" in message or "resource exhausted" in message
 
     def get_compressed_context(self, file_path: str) -> dict[str, Any]:
         file_id = f"file:{file_path}"
