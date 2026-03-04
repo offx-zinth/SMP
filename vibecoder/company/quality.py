@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import subprocess
 import uuid
 from pathlib import Path
 
 from vibecoder.company.event_bus import Event
+from vibecoder.company.infrastructure import DockerOrchestrator
 from vibecoder.company.leadership import ActorMessage, BaseActor
 from vibecoder.company.state import PullRequest, Ticket
 
@@ -14,10 +14,18 @@ logger = logging.getLogger(__name__)
 
 
 class QAEngineer(BaseActor):
-    """Validates PRs via dynamic test execution and visual checks for UI work."""
+    """Validates PRs with containerized quality gates in isolated runtime sandboxes."""
 
-    def __init__(self, *, bus, memory, workspace: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        bus,
+        memory,
+        orchestrator: DockerOrchestrator | None = None,
+        workspace: Path | None = None,
+    ) -> None:
         super().__init__(name="QAEngineer", bus=bus, memory=memory)
+        self._orchestrator = orchestrator or DockerOrchestrator()
         self.workspace = workspace or Path.cwd()
 
     def register(self) -> None:
@@ -62,13 +70,19 @@ class QAEngineer(BaseActor):
             )
 
     def _run_quality_suite(self, ticket: Ticket) -> tuple[str, str]:
-        command = ["python", "-m", "pytest", "-q"] if ticket.role != "frontend" else ["python", "-m", "pytest", "-q"]
-        proc = subprocess.run(command, cwd=self.workspace, capture_output=True, text=True, check=False)
-        if proc.returncode != 0:
-            return "REJECTED", proc.stderr.strip() or proc.stdout.strip() or "pytest failed"
+        try:
+            logs = self._orchestrator.run_container(
+                image="python:3.11",
+                command="pytest",
+                working_dir="/workspace",
+            )
+        except RuntimeError as exc:
+            details = str(exc).strip()
+            return "REJECTED", details or "Containerized pytest execution failed"
 
-        if ticket.role == "frontend":
-            # Stub for playwright + gemini-vision integration in autonomous UI validation pipeline.
-            return "APPROVED", "Playwright visual checks queued and baseline matched."
-
-        return "APPROVED", "All automated test suites passed."
+        output = logs.strip()
+        lowered = output.lower()
+        failed_markers = ["failed", "error", "traceback", "no tests ran"]
+        if any(marker in lowered for marker in failed_markers):
+            return "REJECTED", output or f"pytest failed for ticket {ticket.id}"
+        return "APPROVED", output or "All containerized quality checks passed"
