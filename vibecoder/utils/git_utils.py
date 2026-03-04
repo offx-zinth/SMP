@@ -1,18 +1,21 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Iterable
 
 from git import InvalidGitRepositoryError, Repo
 from google import genai
 
+from vibecoder.context import AppContext
 
-class GitSafetyManager:
-    def __init__(self, workspace: str | Path = ".") -> None:
-        self.workspace = Path(workspace).resolve()
+
+class GitManager:
+    """Git safety wrapper used by the orchestrator and REPL commands."""
+
+    def __init__(self, app_context: AppContext) -> None:
+        self.context = app_context
+        self.workspace = app_context.config.workspace_dir.resolve()
         self._repo = self._load_repo()
-        self._genai_client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+        self._genai_client = genai.Client(api_key=app_context.config.gemini_api_key)
 
     def _load_repo(self) -> Repo | None:
         try:
@@ -20,26 +23,34 @@ class GitSafetyManager:
         except InvalidGitRepositoryError:
             return None
 
-    @property
     def is_repo(self) -> bool:
         return self._repo is not None
 
-    def commit_edits(self, files_changed: list[str], message: str | None = None) -> str:
+    def commit_changes(self, files: list[str], diff_summary: str) -> str:
         if not self._repo:
-            return "Skipped commit: workspace is not a git repository."
-        if not files_changed:
-            return "Skipped commit: no files changed."
+            raise RuntimeError("Workspace is not a git repository.")
+        if not files:
+            return "No files to commit."
 
         repo = self._repo
-        relative_files = [str(Path(path).resolve().relative_to(Path(repo.working_tree_dir).resolve())) for path in files_changed]
+        worktree = Path(repo.working_tree_dir or self.workspace).resolve()
+        relative_files: list[str] = []
+        for file in files:
+            path = Path(file).resolve()
+            if worktree not in path.parents and path != worktree:
+                continue
+            relative_files.append(str(path.relative_to(worktree)))
+
+        if not relative_files:
+            return "No repository-scoped files to commit."
+
         repo.index.add(relative_files)
+        if not repo.is_dirty(index=True, working_tree=False, untracked_files=False):
+            return "No staged changes to commit."
 
-        if not repo.is_dirty(index=True, working_tree=True, untracked_files=True):
-            return "Skipped commit: index has no changes."
-
-        commit_message = message.strip() if message else self._generate_commit_message(relative_files)
-        commit = repo.index.commit(commit_message)
-        return f"Committed {len(relative_files)} file(s): {commit.hexsha[:8]}"
+        message = self._generate_commit_message(diff_summary)
+        commit = repo.index.commit(message)
+        return f"Committed {len(relative_files)} file(s): {commit.hexsha[:8]} — {message}"
 
     def undo_last_commit(self) -> str:
         if not self._repo:
@@ -47,27 +58,18 @@ class GitSafetyManager:
         repo = self._repo
         if not repo.head.is_valid():
             return "Cannot undo: repository has no commits."
+        repo.git.reset("--hard", "HEAD~1")
+        return "Undid last commit with hard reset (HEAD~1)."
 
-        repo.git.reset("--soft", "HEAD~1")
-        return "Reverted last commit (soft reset to HEAD~1)."
-
-    def _generate_commit_message(self, files_changed: Iterable[str]) -> str:
-        if not self._repo:
-            return "chore: apply vibecoder edits"
-
-        diff = self._repo.git.diff("--cached", "--", *files_changed)
-        if not diff.strip():
-            return "chore: apply vibecoder edits"
-
+    def _generate_commit_message(self, diff_summary: str) -> str:
         prompt = (
-            "Write a concise Conventional Commit message for this diff. "
-            "Return one line only, max 72 chars.\n\n"
-            f"Diff:\n{diff[:12000]}"
+            "Write a concise Conventional Commit message. "
+            "Max 72 chars. Single line only.\n\n"
+            f"Diff summary:\n{diff_summary[:6000]}"
         )
         response = self._genai_client.models.generate_content(
             model="gemini-2.5-flash",
             contents=prompt,
         )
-        text = (response.text or "").strip().splitlines()[0:1]
-        candidate = text[0].strip() if text else ""
-        return candidate or "chore: apply vibecoder edits"
+        first_line = ((response.text or "").strip().splitlines() or [""])[0].strip()
+        return first_line or "chore: apply vibecoder changes"
