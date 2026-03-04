@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, cast
 
@@ -12,6 +13,40 @@ from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponen
 
 from vibecoder.context import AppContext
 from vibecoder.smp.parser import ParsedNode
+
+
+@dataclass(slots=True)
+class TokenAwareContextBuilder:
+    max_tokens: int
+    chars_per_token: int = 4
+
+    @property
+    def max_chars(self) -> int:
+        return self.max_tokens * self.chars_per_token
+
+    def _priority_fields(self, entity: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": entity.get("id"),
+            "file_path": entity.get("file_path"),
+            "signature": entity.get("signature"),
+            "docstring": entity.get("docstring"),
+            "relationships": entity.get("relationships", []),
+            "type": entity.get("type"),
+            "name": entity.get("name"),
+            "semantic_summary": entity.get("semantic_summary"),
+        }
+
+    def fit_entities(self, entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        selected: list[dict[str, Any]] = []
+        used_chars = 0
+        for entity in entities:
+            packed = self._priority_fields(entity)
+            entity_json = json.dumps(packed, ensure_ascii=False)
+            if used_chars + len(entity_json) > self.max_chars:
+                continue
+            selected.append(packed)
+            used_chars += len(entity_json)
+        return selected
 
 
 class SMPMemory:
@@ -163,7 +198,7 @@ class SMPMemory:
             self.collection.query(query_texts=[query], n_results=n_results),
         )
 
-    def get_compressed_context(self, file_path: str) -> str:
+    def get_compressed_context(self, file_path: str, *, token_budget: int = 5000) -> str:
         """Returns dense JSON context for a file and nearby blast-radius nodes."""
         file_id = f"file:{file_path}"
         if not self.graph.has_node(file_id):
@@ -187,16 +222,33 @@ class SMPMemory:
                     "type": attrs.get("type"),
                     "name": attrs.get("name"),
                     "file_path": attrs.get("file_path"),
+                    "signature": attrs.get("signature"),
+                    "docstring": attrs.get("docstring"),
                     "semantic_summary": attrs.get("semantic_summary"),
-                    "outgoing": outgoing,
+                    "relationships": outgoing,
                 }
             )
 
+        entities.sort(
+            key=lambda entry: (
+                entry.get("file_path") != file_path,
+                not bool(entry.get("signature")),
+                not bool(entry.get("docstring")),
+                -len(entry.get("relationships", [])),
+            )
+        )
+
+        builder = TokenAwareContextBuilder(max_tokens=token_budget)
+        packed_entities = builder.fit_entities(entities)
+
+        payload = {
+            "target_file": file_path,
+            "graph_data": packed_entities,
+        }
         prompt = (
             "Compress this blast-radius graph into dense JSON for an autonomous coding agent. "
             "Output valid JSON with keys: file, primary_entities, risky_dependencies, edit_guidance.\n\n"
-            f"Target file: {file_path}\n"
-            f"Graph data:\n{json.dumps(entities, ensure_ascii=False)[:20000]}"
+            f"Context payload:\n{json.dumps(payload, ensure_ascii=False)}"
         )
         response = self._genai_client.models.generate_content(
             model="gemini-2.5-flash",

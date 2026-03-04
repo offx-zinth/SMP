@@ -18,6 +18,18 @@ class EditFailedException(RuntimeError):
     """Raised when a fuzzy edit cannot be applied safely."""
 
 
+class AmbiguousMatchError(EditFailedException):
+    """Raised when multiple fuzzy windows are equally valid for the SEARCH block."""
+
+    def __init__(self, line_numbers: list[int], score: float) -> None:
+        self.line_numbers = line_numbers
+        self.score = score
+        super().__init__(
+            "Ambiguous SEARCH match. Potential matches start on lines "
+            f"{line_numbers} with score={score:.1%}. Expand SEARCH with unique surrounding lines."
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class SearchReplaceBlock:
     search: str
@@ -83,7 +95,7 @@ def apply_edit_fuzzy(original_text: str, search_block: str, replace_block: str, 
     if not original_lines:
         raise EditFailedException("Target file is empty; SEARCH block cannot be matched.")
 
-    best = _find_best_match(original_lines, search_lines)
+    best, ties = _find_best_match(original_lines, search_lines)
     if best.score < threshold:
         raise EditFailedException(
             "Fuzzy match confidence below threshold. "
@@ -92,17 +104,22 @@ def apply_edit_fuzzy(original_text: str, search_block: str, replace_block: str, 
             "Tip: include more unique unchanged lines in SEARCH and avoid paraphrasing code."
         )
 
+    if len(ties) > 1:
+        raise AmbiguousMatchError(line_numbers=[match.start + 1 for match in ties], score=best.score)
+
     updated_lines = original_lines[: best.start] + replace_block.splitlines(keepends=True) + original_lines[best.end :]
     return "".join(updated_lines)
 
 
-def _find_best_match(original_lines: list[str], search_lines: list[str]) -> _MatchResult:
+def _find_best_match(original_lines: list[str], search_lines: list[str]) -> tuple[_MatchResult, list[_MatchResult]]:
     base_len = max(1, len(search_lines))
     min_len = max(1, base_len - 1)
     max_len = min(len(original_lines), base_len + 6)
 
     informative = [line for line in search_lines if _is_informative(line)]
     best = _MatchResult(score=0.0, start=0, end=min_len, rationale="no candidate evaluated")
+    epsilon = 0.005
+    ties: list[_MatchResult] = []
 
     for win_len in range(min_len, max_len + 1):
         limit = len(original_lines) - win_len + 1
@@ -110,10 +127,21 @@ def _find_best_match(original_lines: list[str], search_lines: list[str]) -> _Mat
             end = start + win_len
             window = original_lines[start:end]
             score, rationale = _score_window(search_lines, window, informative_count=len(informative))
-            if score > best.score:
-                best = _MatchResult(score=score, start=start, end=end, rationale=rationale)
+            candidate = _MatchResult(score=score, start=start, end=end, rationale=rationale)
+            if score > best.score + epsilon:
+                best = candidate
+                ties = [candidate]
+            elif abs(score - best.score) <= epsilon:
+                ties.append(candidate)
 
-    return best
+    unique_ties: list[_MatchResult] = []
+    seen: set[tuple[int, int]] = set()
+    for tie in ties:
+        key = (tie.start, tie.end)
+        if key not in seen:
+            unique_ties.append(tie)
+            seen.add(key)
+    return best, unique_ties
 
 
 def _score_window(search: Iterable[str], window: Iterable[str], *, informative_count: int) -> tuple[float, str]:
@@ -123,7 +151,6 @@ def _score_window(search: Iterable[str], window: Iterable[str], *, informative_c
     s_norm = [_normalize(line) for line in search_lines]
     w_norm = [_normalize(line) for line in window_lines]
 
-    # Compare informative lines first to tolerate omitted comments/blank lines.
     s_filtered = [_normalize(line) for line in search_lines if _is_informative(line)]
     w_filtered = [_normalize(line) for line in window_lines if _is_informative(line)]
     pair_count = min(len(s_filtered), len(w_filtered))
@@ -136,7 +163,6 @@ def _score_window(search: Iterable[str], window: Iterable[str], *, informative_c
     else:
         line_score = difflib.SequenceMatcher(None, s_norm, w_norm).ratio()
 
-    # Sequence score captures global ordering and nearby structure.
     if not s_filtered:
         seq_score = difflib.SequenceMatcher(None, s_norm, w_norm).ratio()
     else:

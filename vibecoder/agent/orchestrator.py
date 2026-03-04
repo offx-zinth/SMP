@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
-from pathlib import Path
+from dataclasses import dataclass
 from typing import Any
 
 from google import genai
@@ -11,6 +11,32 @@ from vibecoder.agent.tools import AgentTools
 from vibecoder.context import AppContext
 from vibecoder.smp.memory import SMPMemory
 from vibecoder.utils.git_utils import GitManager
+
+
+@dataclass(slots=True)
+class ToolCallRecord:
+    name: str
+    args_json: str
+    ok: bool
+
+
+class ToolHistory:
+    """Tracks recent tool calls to prevent repetitive failed loops."""
+
+    def __init__(self) -> None:
+        self._records: list[ToolCallRecord] = []
+
+    def append(self, name: str, args: dict[str, Any], ok: bool) -> None:
+        self._records.append(ToolCallRecord(name=name, args_json=json.dumps(args, sort_keys=True), ok=ok))
+
+    def repeated_failure(self) -> ToolCallRecord | None:
+        if len(self._records) < 2:
+            return None
+        last = self._records[-1]
+        prev = self._records[-2]
+        if last.name == prev.name and last.args_json == prev.args_json and not last.ok and not prev.ok:
+            return last
+        return None
 
 
 class AgentOrchestrator:
@@ -24,6 +50,7 @@ class AgentOrchestrator:
         self.tools = AgentTools(app_context=app_context, memory=self.memory)
         self.git = GitManager(app_context=app_context)
         self.history: list[dict[str, Any]] = []
+        self.tool_history = ToolHistory()
 
     def chat_turn(self, user_prompt: str, max_steps: int = 24) -> str:
         self.history.append({"role": "user", "parts": [{"text": user_prompt}]})
@@ -66,8 +93,10 @@ class AgentOrchestrator:
                 try:
                     output = self._execute_tool(tool_name, args)
                     payload = {"ok": True, "result": output}
+                    self.tool_history.append(tool_name, args, ok=True)
                 except Exception as exc:
                     payload = {"ok": False, "error": str(exc)}
+                    self.tool_history.append(tool_name, args, ok=False)
 
                 tool_parts.append(
                     {
@@ -77,6 +106,18 @@ class AgentOrchestrator:
                         }
                     }
                 )
+
+                repeated = self.tool_history.repeated_failure()
+                if repeated is not None:
+                    message = (
+                        "Stopping to avoid repetitive failed tool loop: "
+                        f"{repeated.name} called twice with same args and failed. "
+                        "Please provide additional guidance or refine the task."
+                    )
+                    self.history.append({"role": "model", "parts": model_parts})
+                    self.history.append({"role": "user", "parts": tool_parts})
+                    self.history.append({"role": "model", "parts": [{"text": message}]})
+                    return message
 
             self.history.append({"role": "model", "parts": model_parts})
             self.history.append({"role": "user", "parts": tool_parts})
@@ -145,5 +186,7 @@ class AgentOrchestrator:
             "You are VibeCoder, an autonomous staff-level coding agent. "
             "Think in a ReAct style and call tools iteratively until you have enough evidence. "
             "Use search_codebase/explore_graph/read_file before apply_edit when possible. "
+            "If apply_edit fails with AmbiguousMatchError, expand your SEARCH block with unique surrounding lines. "
+            "If the same tool call fails twice in a row, stop and ask the user for clarification. "
             "When edits succeed, summarize exactly what changed and why."
         )
