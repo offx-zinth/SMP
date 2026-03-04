@@ -7,8 +7,7 @@ import typer
 from rich.console import Console
 from rich.progress import track
 
-from vibecoder.agent.coder import VibeCoderAgent
-from vibecoder.agent.file_editor import AiderStyleEditor
+from vibecoder.repl import VibeRepl
 from vibecoder.smp.memory import SMPMemory
 from vibecoder.smp.parser import ASTParser, ParsedNode
 
@@ -25,7 +24,7 @@ def _scan_source_files(root: Path) -> list[Path]:
         current = Path(dirpath)
         for filename in filenames:
             path = current / filename
-            if path.suffix.lower() in {".py", ".ts"}:
+            if path.suffix.lower() in {".py", ".ts", ".tsx", ".js", ".jsx"}:
                 files.append(path)
 
     return files
@@ -41,6 +40,13 @@ def _parse_many(parser: ASTParser, files: Iterable[Path]) -> list[ParsedNode]:
     return parsed
 
 
+@app.callback(invoke_without_command=True)
+def vibe_root(ctx: typer.Context) -> None:
+    """Launch interactive REPL when no subcommand is provided."""
+    if ctx.invoked_subcommand is None:
+        VibeRepl(workspace=Path.cwd()).run()
+
+
 @app.command("init")
 def vibe_init() -> None:
     """Build initial SMP graph + Chroma semantics for current workspace."""
@@ -50,7 +56,7 @@ def vibe_init() -> None:
 
     files = _scan_source_files(workspace)
     if not files:
-        console.print("[red]No .py or .ts files found.[/red]")
+        console.print("[red]No supported source files found.[/red]")
         raise typer.Exit(code=1)
 
     parsed_nodes = _parse_many(parser, files)
@@ -59,32 +65,6 @@ def vibe_init() -> None:
 
     console.print(f"[green]Indexed {len(files)} files, {len(parsed_nodes)} AST nodes.[/green]")
     console.print(f"[green]Enriched {enriched} graph nodes into ChromaDB.[/green]")
-
-
-@app.command("code")
-def vibe_code(file: str, prompt: str) -> None:
-    """Generate and apply SEARCH/REPLACE edits for a specific file."""
-    workspace = Path.cwd()
-    target = (workspace / file).resolve()
-    if not target.exists():
-        console.print(f"[red]File not found: {file}[/red]")
-        raise typer.Exit(code=1)
-
-    agent = VibeCoderAgent(workspace=workspace)
-    editor = AiderStyleEditor()
-    parser = ASTParser()
-
-    console.print("[cyan]Running VibeCoder reasoning loop...[/cyan]")
-    model_output = agent.run_vibe_loop(prompt=prompt, current_file=file)
-
-    console.print("[cyan]Applying SEARCH/REPLACE edits...[/cyan]")
-    editor.apply_response(target, model_output)
-
-    parsed_nodes = parser.parse_file(target)
-    agent.memory.replace_file_nodes(str(target), parsed_nodes)
-    agent.memory.enrich_nodes()
-
-    console.print("[green]Edit applied and SMP memory incrementally updated.[/green]")
 
 
 if __name__ == "__main__":
