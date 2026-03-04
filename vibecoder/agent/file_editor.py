@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import re
 import tempfile
 
 
@@ -24,20 +25,22 @@ class AiderStyleEditor:
     SPLIT_MARKER = "======="
     REPLACE_MARKER = ">>>>>>> REPLACE"
 
+    _FENCE_LINE_RE = re.compile(r"^`{3,}[^`]*$|^~{3,}[^~]*$")
+
     def parse_blocks(self, response_text: str) -> list[SearchReplaceBlock]:
-        lines = response_text.splitlines(keepends=True)
+        lines = self._trim_to_blocks(response_text).splitlines(keepends=True)
         idx = 0
         blocks: list[SearchReplaceBlock] = []
 
         while idx < len(lines):
-            line = lines[idx].strip("\n")
-            if line.strip() != self.SEARCH_MARKER:
+            line = lines[idx]
+            if not self._is_marker_line(line, self.SEARCH_MARKER):
                 idx += 1
                 continue
 
             idx += 1
             search_lines: list[str] = []
-            while idx < len(lines) and lines[idx].strip("\n").strip() != self.SPLIT_MARKER:
+            while idx < len(lines) and not self._is_marker_line(lines[idx], self.SPLIT_MARKER):
                 search_lines.append(lines[idx])
                 idx += 1
 
@@ -46,7 +49,7 @@ class AiderStyleEditor:
 
             idx += 1
             replace_lines: list[str] = []
-            while idx < len(lines) and lines[idx].strip("\n").strip() != self.REPLACE_MARKER:
+            while idx < len(lines) and not self._is_marker_line(lines[idx], self.REPLACE_MARKER):
                 replace_lines.append(lines[idx])
                 idx += 1
 
@@ -54,11 +57,59 @@ class AiderStyleEditor:
                 raise SearchReplaceParserError("Malformed SEARCH/REPLACE block: missing REPLACE marker")
 
             idx += 1
-            blocks.append(SearchReplaceBlock(search="".join(search_lines), replace="".join(replace_lines)))
+            blocks.append(
+                SearchReplaceBlock(
+                    search=self._strip_wrapping_markdown("".join(search_lines)),
+                    replace=self._strip_wrapping_markdown("".join(replace_lines)),
+                )
+            )
 
         if not blocks:
             raise SearchReplaceParserError("No SEARCH/REPLACE blocks found in model output.")
         return blocks
+
+    def _trim_to_blocks(self, response_text: str) -> str:
+        lines = response_text.splitlines(keepends=True)
+        first_search: int | None = None
+        last_replace: int | None = None
+
+        for i, line in enumerate(lines):
+            if first_search is None and self._is_marker_line(line, self.SEARCH_MARKER):
+                first_search = i
+            if self._is_marker_line(line, self.REPLACE_MARKER):
+                last_replace = i
+
+        if first_search is None or last_replace is None or first_search > last_replace:
+            return response_text
+        return "".join(lines[first_search : last_replace + 1])
+
+    def _is_marker_line(self, raw_line: str, marker: str) -> bool:
+        line = raw_line.strip()
+        if not line:
+            return False
+        line = line.strip("`").strip()
+        return line == marker
+
+    def _strip_wrapping_markdown(self, content: str) -> str:
+        lines = content.splitlines(keepends=True)
+        if not lines:
+            return content
+
+        start = 0
+        end = len(lines)
+        while start < end and not lines[start].strip():
+            start += 1
+        while end > start and not lines[end - 1].strip():
+            end -= 1
+
+        trimmed = lines[start:end]
+        if len(trimmed) >= 2:
+            first = trimmed[0].strip()
+            last = trimmed[-1].strip()
+            if self._FENCE_LINE_RE.match(first) and self._FENCE_LINE_RE.match(last):
+                trimmed = trimmed[1:-1]
+
+        return "".join(trimmed)
 
     def apply_blocks(self, file_path: str | Path, blocks: list[SearchReplaceBlock]) -> str:
         path = Path(file_path)
