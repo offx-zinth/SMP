@@ -1,101 +1,121 @@
 from __future__ import annotations
 
-import asyncio
 import json
-import os
-from dataclasses import dataclass
+import threading
 from pathlib import Path
 from typing import Any
 
 from google import genai
 
-from vibecoder.agent.tools import ToolRegistry
-
-
-@dataclass
-class AgentTurnResult:
-    final_response: str
-    edited_files: list[str]
+from vibecoder.agent.tools import AgentTools
+from vibecoder.context import AppContext
+from vibecoder.smp.memory import SMPMemory
+from vibecoder.utils.git_utils import GitManager
 
 
 class AgentOrchestrator:
-    """Interactive ReAct orchestrator with Gemini function-calling tools."""
+    """Autonomous ReAct loop for Gemini with local tool execution."""
 
-    def __init__(self, workspace: str | Path = ".") -> None:
-        self.workspace = Path(workspace).resolve()
-        self.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-        self.tools = ToolRegistry(workspace=self.workspace)
-        self._history: list[dict[str, Any]] = []
+    def __init__(self, app_context: AppContext, memory: SMPMemory | None = None) -> None:
+        self.context = app_context
+        self.workspace = app_context.config.workspace_dir.resolve()
+        self.client = genai.Client(api_key=app_context.config.gemini_api_key)
+        self.memory = memory or SMPMemory(app_context)
+        self.tools = AgentTools(app_context=app_context, memory=self.memory)
+        self.git = GitManager(app_context=app_context)
+        self.history: list[dict[str, Any]] = []
 
-    async def run_turn(self, user_prompt: str, max_steps: int = 20) -> AgentTurnResult:
-        self._history.append({"role": "user", "parts": [{"text": user_prompt}]})
-        edited_files: set[str] = set()
+    def chat_turn(self, user_prompt: str, max_steps: int = 24) -> str:
+        self.history.append({"role": "user", "parts": [{"text": user_prompt}]})
+        edited_before = set(self.tools.edited_files)
 
         for _ in range(max_steps):
-            response = await asyncio.to_thread(self._call_model)
+            response = self.client.models.generate_content(
+                model="gemini-3-pro",
+                contents=[
+                    {"role": "user", "parts": [{"text": self._system_prompt()}]},
+                    *self.history,
+                ],
+                config={
+                    "tools": [
+                        self.tools.search_codebase,
+                        self.tools.explore_graph,
+                        self.tools.read_file,
+                        self.tools.apply_edit,
+                    ]
+                },
+            )
+
             calls = self._extract_function_calls(response)
             if not calls:
-                text = self._extract_text(response).strip()
-                if not text:
-                    text = "Completed with no textual summary from model."
-                self._history.append({"role": "model", "parts": [{"text": text}]})
-                return AgentTurnResult(final_response=text, edited_files=sorted(edited_files))
+                text = self._extract_text(response).strip() or "Completed with no textual output."
+                self.history.append({"role": "model", "parts": [{"text": text}]})
+
+                applied = sorted(self.tools.edited_files - edited_before)
+                if applied:
+                    self._commit_in_background(applied, diff_summary=text)
+                return text
 
             model_parts: list[dict[str, Any]] = []
             tool_parts: list[dict[str, Any]] = []
+
             for call in calls:
-                name = call["name"]
+                tool_name = call["name"]
                 args = call["args"]
-                model_parts.append({"function_call": {"name": name, "args": args}})
-                result = await asyncio.to_thread(self.tools.execute, name, args)
-                if name == "edit_file":
-                    try:
-                        payload = json.loads(result)
-                        if payload.get("ok"):
-                            edited_files.add(str(Path(payload.get("filepath", "")).resolve()))
-                    except Exception:
-                        pass
+                model_parts.append({"function_call": {"name": tool_name, "args": args}})
+                try:
+                    output = self._execute_tool(tool_name, args)
+                    payload = {"ok": True, "result": output}
+                except Exception as exc:
+                    payload = {"ok": False, "error": str(exc)}
+
                 tool_parts.append(
                     {
                         "function_response": {
-                            "name": name,
-                            "response": {"result": result},
+                            "name": tool_name,
+                            "response": payload,
                         }
                     }
                 )
 
-            self._history.append({"role": "model", "parts": model_parts})
-            self._history.append({"role": "user", "parts": tool_parts})
+            self.history.append({"role": "model", "parts": model_parts})
+            self.history.append({"role": "user", "parts": tool_parts})
 
-        return AgentTurnResult(
-            final_response="Stopped after reaching tool-step limit without final answer.",
-            edited_files=sorted(edited_files),
-        )
+        return "Stopped after reaching tool-loop limit without a final response."
 
-    def _call_model(self) -> Any:
-        return self.client.models.generate_content(
-            model="gemini-3-pro",
-            contents=[
-                {"role": "user", "parts": [{"text": self._system_prompt()}]},
-                *self._history,
-            ],
-            config={"tools": [{"function_declarations": self.tools.declarations}]},
-        )
+    def _commit_in_background(self, files: list[str], diff_summary: str) -> None:
+        if not self.git.is_repo():
+            return
+
+        def _commit() -> None:
+            self.git.commit_changes(files=files, diff_summary=diff_summary)
+
+        threading.Thread(target=_commit, daemon=True).start()
+
+    def _execute_tool(self, name: str, args: dict[str, Any]) -> str:
+        if name == "search_codebase":
+            return self.tools.search_codebase(**args)
+        if name == "explore_graph":
+            return self.tools.explore_graph(**args)
+        if name == "read_file":
+            return self.tools.read_file(**args)
+        if name == "apply_edit":
+            return self.tools.apply_edit(**args)
+        raise ValueError(f"Unknown tool requested: {name}")
 
     @staticmethod
     def _extract_text(response: Any) -> str:
         direct = getattr(response, "text", None)
         if direct:
             return str(direct)
-
-        texts: list[str] = []
+        chunks: list[str] = []
         for candidate in getattr(response, "candidates", []) or []:
             content = getattr(candidate, "content", None)
             for part in getattr(content, "parts", []) or []:
                 text = getattr(part, "text", None)
                 if text:
-                    texts.append(str(text))
-        return "\n".join(texts)
+                    chunks.append(str(text))
+        return "\n".join(chunks)
 
     @staticmethod
     def _extract_function_calls(response: Any) -> list[dict[str, Any]]:
@@ -103,25 +123,27 @@ class AgentOrchestrator:
         for candidate in getattr(response, "candidates", []) or []:
             content = getattr(candidate, "content", None)
             for part in getattr(content, "parts", []) or []:
-                fn = getattr(part, "function_call", None)
-                if not fn:
+                function_call = getattr(part, "function_call", None)
+                if function_call is None:
                     continue
-                name = getattr(fn, "name", None)
-                args = getattr(fn, "args", {})
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = {}
+                name = str(getattr(function_call, "name", "")).strip()
+                raw_args = getattr(function_call, "args", {})
+                args: dict[str, Any]
+                if isinstance(raw_args, str):
+                    args = json.loads(raw_args) if raw_args.strip() else {}
+                elif isinstance(raw_args, dict):
+                    args = raw_args
+                else:
+                    args = {}
                 if name:
-                    calls.append({"name": str(name), "args": args if isinstance(args, dict) else {}})
+                    calls.append({"name": name, "args": args})
         return calls
 
-    def _system_prompt(self) -> str:
+    @staticmethod
+    def _system_prompt() -> str:
         return (
-            "You are VibeCoder, an expert software engineering agent. "
-            "Use tools aggressively and iteratively before editing code. "
-            "Typical flow: semantic search or graph exploration, then file reads, then precise edits. "
-            "When a tool returns an error, reason and try a better tool call. "
-            "After all edits, provide a concise final summary for the user."
+            "You are VibeCoder, an autonomous staff-level coding agent. "
+            "Think in a ReAct style and call tools iteratively until you have enough evidence. "
+            "Use search_codebase/explore_graph/read_file before apply_edit when possible. "
+            "When edits succeed, summarize exactly what changed and why."
         )
