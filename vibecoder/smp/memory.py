@@ -9,7 +9,7 @@ from typing import Any, Iterable
 import chromadb
 import networkx as nx
 from google import genai
-from tenacity import RetryError, retry, retry_if_exception_type, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from vibecoder.smp.parser import ParsedNode
 
@@ -100,7 +100,7 @@ class SMPMemory:
 
                 try:
                     summary = self._generate_summary_with_backoff(prompt)
-                except RetryError as exc:
+                except RateLimitRetryableError as exc:
                     raise RuntimeError(
                         "Exceeded retry budget while enriching node semantics due to API rate limiting."
                     ) from exc

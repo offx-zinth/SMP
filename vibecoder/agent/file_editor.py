@@ -20,9 +20,12 @@ class FileEditApplyError(RuntimeError):
 
 
 class AiderStyleEditor:
-    SEARCH_MARKER = "<<<<<<< SEARCH"
-    SPLIT_MARKER = "======="
-    REPLACE_MARKER = ">>>>>>> REPLACE"
+    _LEFT = "<" * 7
+    _RIGHT = ">" * 7
+    _MID = "=" * 7
+    SEARCH_MARKER = f"{_LEFT} SEARCH"
+    SPLIT_MARKER = _MID
+    REPLACE_MARKER = f"{_RIGHT} REPLACE"
 
     def parse_blocks(self, response_text: str) -> list[SearchReplaceBlock]:
         normalized_text = self._normalize_response_text(response_text)
