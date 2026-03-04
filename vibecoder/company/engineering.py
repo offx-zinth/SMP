@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
-from vibecoder.agent.fuzzy_editor import apply_edit_fuzzy
-from vibecoder.company.event_bus import Event
+from google import genai
+
+from vibecoder.agent.fuzzy_editor import EditFailedException, apply_edit_fuzzy, parse_search_replace_blocks
+from vibecoder.company.event_bus import AsyncEventBus, Event
 from vibecoder.company.infrastructure import DockerOrchestrator
 from vibecoder.company.leadership import ActorMessage, BaseActor
 from vibecoder.company.state import CorporateMemory, PullRequest, SystemArchitecture, Ticket
@@ -14,13 +18,32 @@ from vibecoder.company.state import CorporateMemory, PullRequest, SystemArchitec
 logger = logging.getLogger(__name__)
 
 
+@dataclass(slots=True)
+class PlannedEdits:
+    file_path: Path
+    model_output: str
+
+
 class DeveloperAgent(BaseActor):
     """Generic FE/BE developer that executes tickets and emits structured PR payloads."""
 
-    def __init__(self, *, name: str, role: str, bus, memory: CorporateMemory, workspace: Path | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        name: str,
+        role: str,
+        bus: AsyncEventBus,
+        memory: CorporateMemory,
+        workspace: Path | None = None,
+        gemini_api_key: str | None = None,
+    ) -> None:
         super().__init__(name=name, bus=bus, memory=memory)
         self.role = role
         self.workspace = workspace or Path.cwd()
+        api_key = gemini_api_key or os.getenv("GEMINI_API_KEY", "").strip()
+        if not api_key:
+            raise ValueError("DeveloperAgent requires Gemini API key via constructor or GEMINI_API_KEY env var")
+        self._client = genai.Client(api_key=api_key).aio
 
     def register(self) -> None:
         self.bus.subscribe("ticket_assigned", self._enqueue)
@@ -42,43 +65,128 @@ class DeveloperAgent(BaseActor):
         architectures = self.memory.list("system_architectures", limit=1)
         architecture = SystemArchitecture.model_validate(architectures[0].model_dump()) if architectures else None
 
-        artifact_path = await asyncio.to_thread(self._implement_ticket, ticket, architecture)
-        pr = PullRequest(
-            id=f"pr-{uuid.uuid4().hex[:8]}",
-            ticket_id=ticket.id,
-            title=f"[{self.role}] {ticket.title}",
-            description=f"Automated implementation by {self.name}",
-            branch=f"auto/{ticket.id}",
-            files_changed=[str(artifact_path)],
-            checks={"unit": "pending", "lint": "pending"},
+        changed_files: list[str] = []
+        try:
+            changed_files = await self._implement_ticket(ticket=ticket, architecture=architecture)
+            pr = PullRequest(
+                id=f"pr-{uuid.uuid4().hex[:8]}",
+                ticket_id=ticket.id,
+                title=f"[{self.role}] {ticket.title}",
+                description=f"Automated implementation by {self.name}",
+                branch=f"auto/{ticket.id}",
+                files_changed=changed_files,
+                checks={"unit": "pending", "lint": "pending"},
+            )
+            self.memory.upsert(pr)
+
+            ticket.status = "review"
+            self.memory.upsert(ticket)
+            await self.bus.publish(Event(topic="pull_request_opened", sender=self.name, payload=pr.model_dump(mode="json")))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("DeveloperAgent %s failed ticket=%s", self.name, ticket.id)
+            ticket.status = "blocked"
+            self.memory.upsert(ticket)
+            await self.bus.publish(
+                Event(
+                    topic="qa_rejected",
+                    sender=self.name,
+                    payload={
+                        "epic_id": ticket.epic_id,
+                        "title": ticket.title,
+                        "reason": f"Implementation failure: {exc}",
+                        "files": changed_files,
+                    },
+                )
+            )
+        finally:
+            self._trigger_self_cleanup()
+
+    async def _implement_ticket(self, *, ticket: Ticket, architecture: SystemArchitecture | None) -> list[str]:
+        system_prompt = self._build_system_prompt(ticket=ticket, architecture=architecture)
+        response = await self._client.models.generate_content(
+            model="gemini-3-pro",
+            contents=system_prompt,
         )
-        self.memory.upsert(pr)
+        model_text = (response.text or "").strip()
+        if not model_text:
+            raise RuntimeError("Gemini returned empty implementation response")
 
-        ticket.status = "review"
-        self.memory.upsert(ticket)
-        await self.bus.publish(Event(topic="pull_request_opened", sender=self.name, payload=pr.model_dump(mode="json")))
+        edits = self._parse_file_scoped_blocks(model_text)
+        if not edits:
+            raise RuntimeError("No valid file edits parsed from Gemini response")
 
-    def _implement_ticket(self, ticket: Ticket, architecture: SystemArchitecture | None) -> Path:
-        output_file = self.workspace / "vibecoder" / "company" / "autogenerated" / f"{ticket.id}.md"
-        output_file.parent.mkdir(parents=True, exist_ok=True)
-        architecture_title = architecture.title if architecture else "No architecture found"
+        changed_files: list[str] = []
+        for edit in edits:
+            target = edit.file_path
+            if not target.exists():
+                raise FileNotFoundError(f"Model referenced missing file: {target}")
 
-        base_content = (
-            f"# Ticket Delivery\n\n"
-            f"- Ticket: {ticket.id}\n"
-            f"- Title: {ticket.title}\n"
-            f"- Role: {self.role}\n"
-            f"- Architecture: {architecture_title}\n"
+            original = target.read_text(encoding="utf-8")
+            updated = original
+            for block in parse_search_replace_blocks(edit.model_output):
+                updated = apply_edit_fuzzy(updated, block.search, block.replace, threshold=0.85)
+
+            if updated != original:
+                target.write_text(updated, encoding="utf-8")
+                changed_files.append(str(target.relative_to(self.workspace)))
+
+        if not changed_files:
+            raise EditFailedException("Parsed edits did not modify any files")
+        return changed_files
+
+    def _build_system_prompt(self, *, ticket: Ticket, architecture: SystemArchitecture | None) -> str:
+        architecture_blob = architecture.model_dump_json(indent=2) if architecture else "{}"
+        return (
+            "You are a principal software engineer implementing a production ticket. "
+            "Return ONLY file-scoped SEARCH/REPLACE edits in this exact format:\n"
+            "FILE: relative/path.py\n"
+            "<<<<<<< SEARCH\n"
+            "<existing exact snippet>\n"
+            "=======\n"
+            "<replacement snippet>\n"
+            ">>>>>>> REPLACE\n\n"
+            "Do not add prose, markdown explanations, or code fences. "
+            "Use only files that already exist.\n\n"
+            f"Ticket ID: {ticket.id}\n"
+            f"Role: {self.role}\n"
+            f"Title: {ticket.title}\n"
+            f"Description:\n{ticket.description}\n\n"
+            f"Acceptance Criteria: {ticket.acceptance_criteria}\n"
+            f"SystemArchitecture:\n{architecture_blob}\n"
         )
 
-        templated = apply_edit_fuzzy(
-            "HEADER\nBODY\n",
-            "BODY\n",
-            f"{base_content}\n",
-            threshold=0.0,
-        )
-        output_file.write_text(templated, encoding="utf-8")
-        return output_file
+    def _parse_file_scoped_blocks(self, model_text: str) -> list[PlannedEdits]:
+        chunks: list[PlannedEdits] = []
+        current_file: Path | None = None
+        current_lines: list[str] = []
+
+        def flush_current() -> None:
+            if current_file is None or not current_lines:
+                return
+            chunk_text = "".join(current_lines)
+            parse_search_replace_blocks(chunk_text)
+            chunks.append(PlannedEdits(file_path=current_file, model_output=chunk_text))
+
+        for line in model_text.splitlines(keepends=True):
+            if line.strip().startswith("FILE:"):
+                flush_current()
+                rel_path = line.split("FILE:", 1)[1].strip()
+                current_file = (self.workspace / rel_path).resolve()
+                if not str(current_file).startswith(str(self.workspace.resolve())):
+                    raise ValueError(f"Refusing edit outside workspace: {rel_path}")
+                current_lines = []
+                continue
+            current_lines.append(line)
+
+        flush_current()
+        return chunks
+
+    def _trigger_self_cleanup(self) -> None:
+        self._running = False
+        task = self._task
+        self._task = None
+        if task and not task.done():
+            task.cancel()
 
 
 class DevOpsEngineer(BaseActor):
