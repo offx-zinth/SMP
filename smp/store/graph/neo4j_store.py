@@ -136,13 +136,16 @@ class Neo4jGraphStore(GraphStore):
         return deleted > 0
 
     async def delete_nodes_by_file(self, file_path: str) -> int:
+        # Match both exact path and stem (filename) to handle path variants:
+        #   "core_db.py" and "smp/demo/core_db.py" refer to the same file.
+        stem = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
         cypher = f"""
         MATCH (n:{_ALL_LABEL})
-        WHERE n.file_path = $file_path
+        WHERE n.file_path = $file_path OR n.file_path = $stem
         DETACH DELETE n
         RETURN count(n) AS deleted
         """
-        records = await self._execute(cypher, {"file_path": file_path})
+        records = await self._execute(cypher, {"file_path": file_path, "stem": stem})
         deleted = records[0]["deleted"] if records else 0
         log.info("nodes_deleted_by_file", file_path=file_path, deleted=deleted)
         return deleted
@@ -235,13 +238,21 @@ class Neo4jGraphStore(GraphStore):
         edge_type: EdgeType,
         depth: int,
         max_nodes: int = 100,
+        direction: str = "outgoing",
     ) -> list[GraphNode]:
         rel_type = edge_type.value
-        cypher = f"""
-        MATCH path = (start:{_ALL_LABEL} {{id: $id}})-[r:{rel_type}*1..{depth}]->(node:{_ALL_LABEL})
-        RETURN DISTINCT node
-        LIMIT $max_nodes
-        """
+        if direction == "incoming":
+            cypher = f"""
+            MATCH path = (start:{_ALL_LABEL} {{id: $id}})<-[r:{rel_type}*1..{depth}]-(node:{_ALL_LABEL})
+            RETURN DISTINCT node
+            LIMIT $max_nodes
+            """
+        else:
+            cypher = f"""
+            MATCH path = (start:{_ALL_LABEL} {{id: $id}})-[r:{rel_type}*1..{depth}]->(node:{_ALL_LABEL})
+            RETURN DISTINCT node
+            LIMIT $max_nodes
+            """
         records = await self._execute(cypher, {"id": start_id, "max_nodes": max_nodes})
         return [_record_to_node(dict(rec["node"])) for rec in records]
 
@@ -260,8 +271,12 @@ class Neo4jGraphStore(GraphStore):
             conditions.append("n.type = $type")
             params["type"] = type.value
         if file_path:
-            conditions.append("n.file_path = $file_path")
+            # Match both exact path and stem to handle path variants:
+            #   "core_db.py" and "smp/demo/core_db.py" are the same file.
+            stem = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
+            conditions.append("(n.file_path = $file_path OR n.file_path = $stem)")
             params["file_path"] = file_path
+            params["stem"] = stem
         if name:
             conditions.append("n.name = $name")
             params["name"] = name

@@ -19,7 +19,9 @@ from smp.logging import get_logger
 from smp.parser.registry import ParserRegistry
 from smp.protocol.router import handle_rpc
 from smp.store.graph.neo4j_store import Neo4jGraphStore
+from smp.store.interfaces import VectorStore
 from smp.store.vector.chroma_store import ChromaVectorStore
+from smp.store.vector.noop_store import NoOpVectorStore
 
 log = get_logger(__name__)
 
@@ -28,21 +30,32 @@ def create_app(
     neo4j_uri: str = "bolt://localhost:7687",
     neo4j_user: str = "neo4j",
     neo4j_password: str = "123456789$Do",
-    gemini_api_key: str | None = None,
+    nv_api_key: str | None = None,
     persist_dir: str | None = None,
 ) -> FastAPI:
     """Create and configure the SMP FastAPI application."""
 
+    # Use a persistent ChromaDB directory by default so CLI and server share it
+    if persist_dir is None:
+        persist_dir = str(Path.home() / ".smp" / "chroma")
+
     @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
         # --- Startup ---
         graph = Neo4jGraphStore(uri=neo4j_uri, user=neo4j_user, password=neo4j_password)
         await graph.connect()
 
-        vector = ChromaVectorStore(persist_directory=persist_dir)
+        # Use NoOpVectorStore if enrichment is disabled
+        enrichment_mode = os.environ.get("SMP_ENRICHMENT", "full").lower()
+        if enrichment_mode == "none":
+            vector: VectorStore = NoOpVectorStore()
+            log.info("using_noop_vector_store")
+        else:
+            vector = ChromaVectorStore(persist_directory=persist_dir)
+
         await vector.connect()
 
-        enricher = LLMSemanticEnricher(api_key=gemini_api_key)
+        enricher = LLMSemanticEnricher(api_key=nv_api_key)
         engine = DefaultQueryEngine(graph, vector, enricher)
         builder = DefaultGraphBuilder(graph)
         registry = ParserRegistry()

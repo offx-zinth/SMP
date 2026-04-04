@@ -42,7 +42,9 @@ class DefaultQueryEngine(QueryEngineInterface):
             "semantic": {
                 "purpose": node.semantic.purpose,
                 "confidence": node.semantic.confidence,
-            } if node.semantic else None,
+            }
+            if node.semantic
+            else None,
         }
 
     # -----------------------------------------------------------------------
@@ -58,10 +60,7 @@ class DefaultQueryEngine(QueryEngineInterface):
         return {
             "node": self._node_to_dict(node),
             "neighbors": [self._node_to_dict(n) for n in neighbors],
-            "edges": [
-                {"source": e.source_id, "target": e.target_id, "type": e.type.value}
-                for e in edges
-            ],
+            "edges": [{"source": e.source_id, "target": e.target_id, "type": e.type.value} for e in edges],
         }
 
     # -----------------------------------------------------------------------
@@ -93,10 +92,7 @@ class DefaultQueryEngine(QueryEngineInterface):
         all_edges: list[dict[str, Any]] = []
         for node in nodes:
             edges = await self._graph.get_edges(node.id)
-            all_edges.extend(
-                {"source": e.source_id, "target": e.target_id, "type": e.type.value}
-                for e in edges
-            )
+            all_edges.extend({"source": e.source_id, "target": e.target_id, "type": e.type.value} for e in edges)
         result: dict[str, Any] = {
             "file_path": file_path,
             "scope": scope,
@@ -113,9 +109,7 @@ class DefaultQueryEngine(QueryEngineInterface):
         node = await self._graph.get_node(entity_id)
         if not node:
             return {"error": f"Node {entity_id} not found"}
-        dependents = await self._graph.traverse(
-            entity_id, EdgeType.CALLS, depth, max_nodes=200
-        )
+        dependents = await self._graph.traverse(entity_id, EdgeType.CALLS, depth, max_nodes=200, direction="incoming")
         return {
             "entity": self._node_to_dict(node),
             "affected_nodes": [self._node_to_dict(n) for n in dependents],
@@ -138,8 +132,7 @@ class DefaultQueryEngine(QueryEngineInterface):
         if self._enricher:
             embedding = await self._enricher.embed(description)
         else:
-            from smp.engine.enricher import _hash_embed
-            embedding = _hash_embed(description)
+            raise RuntimeError("Semantic search requires an enricher. Start the server with NV_API set.")
 
         # Search vector store
         results = await self._vector.query(embedding, top_k=top_k)
@@ -151,17 +144,21 @@ class DefaultQueryEngine(QueryEngineInterface):
         for r in results:
             node = await self._graph.get_node(r["id"])
             if node:
-                output.append({
-                    "node": self._node_to_dict(node),
-                    "score": round(r["score"], 4),
-                    "purpose": r.get("document", ""),
-                })
+                output.append(
+                    {
+                        "node": self._node_to_dict(node),
+                        "score": round(r["score"], 4),
+                        "purpose": r.get("document", ""),
+                    }
+                )
             else:
-                output.append({
-                    "node_id": r["id"],
-                    "score": round(r["score"], 4),
-                    "purpose": r.get("document", ""),
-                })
+                output.append(
+                    {
+                        "node_id": r["id"],
+                        "score": round(r["score"], 4),
+                        "purpose": r.get("document", ""),
+                    }
+                )
 
         log.debug("locate_by_intent", query=description[:50], results=len(output))
         return output

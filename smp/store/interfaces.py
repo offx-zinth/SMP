@@ -94,6 +94,7 @@ class GraphStore(abc.ABC):
         edge_type: EdgeType,
         depth: int,
         max_nodes: int = 100,
+        direction: str = "outgoing", 
     ) -> list[GraphNode]:
         """BFS traversal from *start_id* following *edge_type* edges."""
 
