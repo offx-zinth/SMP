@@ -2,6 +2,7 @@
 A multi-layered authentication system to test SMP's blast radius detection.
 """
 
+
 # ==========================================
 # LAYER 4: DATABASE (The deepest layer)
 # ==========================================
@@ -19,6 +20,7 @@ def verify_hash(plain_text: str, hashed: str) -> bool:
     """Validates a password against a stored hash."""
     return f"{plain_text}_123" == hashed
 
+
 def get_user_model(email: str, tenant_id: str) -> dict:
     """Transforms raw DB record into a business domain model."""
     raw_record = fetch_user_record(email, tenant_id)  # <--- DEPENDS ON LAYER 4
@@ -33,10 +35,10 @@ def get_user_model(email: str, tenant_id: str) -> dict:
 def authenticate_user(email: str, password: str, tenant_id: str) -> str:
     """Core business logic for logging a user in."""
     user = get_user_model(email, tenant_id)  # <--- DEPENDS ON LAYER 3
-    
+
     if verify_hash(password, user["hash"]):  # <--- DEPENDS ON LAYER 3
         return f"jwt_token_for_{user['email']}"
-        
+
     raise PermissionError("Invalid credentials bro 😭")
 
 
@@ -47,8 +49,8 @@ def handle_login_request(request_body: dict) -> dict:
     """API handler for the POST /login route."""
     email = request_body.get("email")
     password = request_body.get("password")
-    tenant_id = request_body.get("tenant_id") # New required field
-    
+    tenant_id = request_body.get("tenant_id")  # New required field
+
     if not email or not password or not tenant_id:
         return {"status": 400, "error": "Missing email, password, or tenant_id"}
 

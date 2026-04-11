@@ -1,0 +1,87 @@
+[
+  {
+    "name": "smp_session_open",
+    "passed": true,
+    "elapsed_s": 0.019,
+    "result": {
+      "passed": true,
+      "session_id": "ses_b1b9fe"
+    },
+    "error": null
+  },
+  {
+    "name": "smp_guard_check",
+    "passed": true,
+    "elapsed_s": 0.014,
+    "result": {
+      "passed": true,
+      "verdict": "blocked"
+    },
+    "error": null
+  },
+  {
+    "name": "smp_lock",
+    "passed": true,
+    "elapsed_s": 0.017,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_checkpoint",
+    "passed": true,
+    "elapsed_s": 0.022,
+    "result": {
+      "passed": true,
+      "checkpoint_id": "chk_b5e39f"
+    },
+    "error": null
+  },
+  {
+    "name": "smp_dryrun",
+    "passed": true,
+    "elapsed_s": 0.03,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_rollback",
+    "passed": true,
+    "elapsed_s": 0.05,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_unlock",
+    "passed": true,
+    "elapsed_s": 0.022,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_audit_get",
+    "passed": true,
+    "elapsed_s": 0.024,
+    "result": {
+      "passed": true,
+      "note": "endpoint responded correctly (no matching audit log)"
+    },
+    "error": null
+  },
+  {
+    "name": "smp_session_close",
+    "passed": true,
+    "elapsed_s": 0.014,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  }
+]

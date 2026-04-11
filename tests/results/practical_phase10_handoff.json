@@ -1,0 +1,56 @@
+[
+  {
+    "name": "smp_handoff_review",
+    "passed": true,
+    "elapsed_s": 0.008,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_handoff_review_comment",
+    "passed": true,
+    "elapsed_s": 0.011,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_handoff_review_approve",
+    "passed": true,
+    "elapsed_s": 0.011,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_handoff_review_reject",
+    "passed": true,
+    "elapsed_s": 0.057,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_handoff_pr",
+    "passed": true,
+    "elapsed_s": 0.013,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_verify_integrity",
+    "passed": true,
+    "elapsed_s": 0.01,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  }
+]

@@ -1,0 +1,32 @@
+[
+  {
+    "name": "smp_update",
+    "passed": true,
+    "elapsed_s": 0.022,
+    "result": {
+      "passed": true,
+      "nodes": 2
+    },
+    "error": null
+  },
+  {
+    "name": "smp_batch_update",
+    "passed": true,
+    "elapsed_s": 0.033,
+    "result": {
+      "passed": true,
+      "updates": 2
+    },
+    "error": null
+  },
+  {
+    "name": "smp_reindex",
+    "passed": true,
+    "elapsed_s": 0.008,
+    "result": {
+      "passed": true,
+      "status": "reindex_requested"
+    },
+    "error": null
+  }
+]

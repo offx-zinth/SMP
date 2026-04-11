@@ -8,11 +8,12 @@ from __future__ import annotations
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 
-from smp.engine.enricher import LLMSemanticEnricher
+from smp.engine.enricher import StaticSemanticEnricher
 from smp.engine.graph_builder import DefaultGraphBuilder
 from smp.engine.query import DefaultQueryEngine
 from smp.logging import get_logger
@@ -30,22 +31,19 @@ def create_app(
     neo4j_uri: str = "bolt://localhost:7687",
     neo4j_user: str = "neo4j",
     neo4j_password: str = "123456789$Do",
-    nv_api_key: str | None = None,
     persist_dir: str | None = None,
+    safety_enabled: bool = False,
 ) -> FastAPI:
     """Create and configure the SMP FastAPI application."""
 
-    # Use a persistent ChromaDB directory by default so CLI and server share it
     if persist_dir is None:
         persist_dir = str(Path.home() / ".smp" / "chroma")
 
     @asynccontextmanager
-    async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]
-        # --- Startup ---
+    async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]  # noqa: ANN202
         graph = Neo4jGraphStore(uri=neo4j_uri, user=neo4j_user, password=neo4j_password)
         await graph.connect()
 
-        # Use NoOpVectorStore if enrichment is disabled
         enrichment_mode = os.environ.get("SMP_ENRICHMENT", "full").lower()
         if enrichment_mode == "none":
             vector: VectorStore = NoOpVectorStore()
@@ -55,32 +53,70 @@ def create_app(
 
         await vector.connect()
 
-        enricher = LLMSemanticEnricher(api_key=nv_api_key)
+        enricher = StaticSemanticEnricher()
         engine = DefaultQueryEngine(graph, vector, enricher)
         builder = DefaultGraphBuilder(graph)
         registry = ParserRegistry()
 
-        # Store components on app state
+        safety: dict[str, Any] | None = None
+        if safety_enabled:
+            from smp.engine.safety import (
+                AuditLogger,
+                CheckpointManager,
+                DryRunSimulator,
+                GuardEngine,
+                LockManager,
+                SessionManager,
+            )
+            from smp.sandbox.executor import SandboxExecutor
+            from smp.sandbox.spawner import SandboxSpawner
+            from smp.engine.telemetry import TelemetryEngine
+            from smp.engine.handoff import HandoffManager
+            from smp.engine.integrity import IntegrityVerifier
+
+            session_manager = SessionManager(graph_store=graph)
+            lock_manager = LockManager(graph_store=graph)
+            session_manager.set_graph_store(graph)
+            lock_manager.set_graph_store(graph)
+            sandbox_spawner = SandboxSpawner()
+            sandbox_executor = SandboxExecutor()
+            telemetry_engine = TelemetryEngine()
+            handoff_manager = HandoffManager()
+            integrity_verifier = IntegrityVerifier()
+
+            # Runtime linker and linker are already available in the graph
+            # We'll add them to app.state for access via context
+            app.state.telemetry_engine = telemetry_engine
+            app.state.handoff_manager = handoff_manager
+            app.state.integrity_verifier = integrity_verifier
+
+            safety = {
+                "session_manager": session_manager,
+                "lock_manager": lock_manager,
+                "guard_engine": GuardEngine(session_manager, lock_manager),
+                "dryrun_simulator": DryRunSimulator(),
+                "checkpoint_manager": CheckpointManager(),
+                "audit_logger": AuditLogger(),
+                "sandbox_spawner": sandbox_spawner,
+                "sandbox_executor": sandbox_executor,
+            }
+
         app.state.graph = graph
         app.state.vector = vector
         app.state.engine = engine
         app.state.builder = builder
         app.state.enricher = enricher
         app.state.registry = registry
+        app.state.safety = safety
 
-        log.info(
-            "server_started",
-            neo4j=neo4j_uri,
-            llm=enricher.has_llm,
-        )
+        log.info("server_started", neo4j=neo4j_uri, safety=safety_enabled)
         yield
 
-        # --- Shutdown ---
         await graph.close()
         await vector.close()
         log.info("server_stopped")
 
-    app = FastAPI(title="SMP — Structural Memory Protocol", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="SMP — Structural Memory Protocol", version="3.0.0", lifespan=lifespan)
 
     @app.post("/rpc")
     async def rpc_endpoint(request: Request) -> Response:
@@ -91,6 +127,10 @@ def create_app(
             builder=app.state.builder,
             registry=app.state.registry,
             vector=app.state.vector,
+            safety=app.state.safety,
+            telemetry_engine=getattr(app.state, "telemetry_engine", None),
+            handoff_manager=getattr(app.state, "handoff_manager", None),
+            integrity_verifier=getattr(app.state, "integrity_verifier", None),
         )
 
     @app.get("/health")
@@ -108,5 +148,4 @@ def create_app(
     return app
 
 
-# Default app instance for `uvicorn smp.protocol.server:app`
 app = create_app()

@@ -5,7 +5,8 @@ Satisfies the VectorStore interface but performs no operations.
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from smp.logging import get_logger
 from smp.store.interfaces import VectorStore

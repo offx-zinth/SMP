@@ -1,0 +1,30 @@
+[
+  {
+    "name": "smp_annotate",
+    "passed": true,
+    "elapsed_s": 0.043,
+    "result": {
+      "passed": true,
+      "status": "annotated"
+    },
+    "error": null
+  },
+  {
+    "name": "smp_annotate_bulk",
+    "passed": true,
+    "elapsed_s": 0.016,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_tag",
+    "passed": true,
+    "elapsed_s": 0.039,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  }
+]

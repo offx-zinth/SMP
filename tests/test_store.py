@@ -1,10 +1,10 @@
-"""Tests for Neo4j graph store and ChromaDB vector store."""
+"""Tests for Neo4j graph store and ChromaDB vector store — SMP(3)."""
 
 from __future__ import annotations
 
 import pytest
 
-from smp.core.models import EdgeType, GraphEdge, GraphNode, NodeType, SemanticInfo
+from smp.core.models import EdgeType, GraphEdge, NodeType, SemanticProperties, StructuralProperties
 from smp.store.graph.neo4j_store import Neo4jGraphStore
 from smp.store.vector.chroma_store import ChromaVectorStore
 from tests.conftest import make_edge, make_node
@@ -22,23 +22,44 @@ class TestNeo4jNodeCRUD:
         fetched = await clean_graph.get_node("func_login")
         assert fetched is not None
         assert fetched.id == "func_login"
-        assert fetched.name == "login"
+        assert fetched.structural.name == "login"
         assert fetched.type == NodeType.FUNCTION
 
     @pytest.mark.asyncio
     async def test_upsert_updates_existing(self, clean_graph: Neo4jGraphStore) -> None:
         node = make_node()
         await clean_graph.upsert_node(node)
-        # Update signature
-        updated = make_node(signature="def login(user: User, otp: str) -> Token:")
+        updated = make_node(
+            structural=StructuralProperties(
+                name="login",
+                file="src/auth/login.py",
+                signature="def login(user: User, otp: str) -> Token:",
+                start_line=10,
+                end_line=25,
+                lines=16,
+            )
+        )
         await clean_graph.upsert_node(updated)
         fetched = await clean_graph.get_node("func_login")
         assert fetched is not None
-        assert "otp" in fetched.signature
+        assert "otp" in fetched.structural.signature
 
     @pytest.mark.asyncio
     async def test_upsert_batch(self, clean_graph: Neo4jGraphStore) -> None:
-        nodes = [make_node(id=f"n{i}", name=f"n{i}") for i in range(10)]
+        nodes = [
+            make_node(
+                id=f"n{i}",
+                structural=StructuralProperties(
+                    name=f"n{i}",
+                    file="test.py",
+                    signature=f"def n{i}():",
+                    start_line=i,
+                    end_line=i + 1,
+                    lines=1,
+                ),
+            )
+            for i in range(10)
+        ]
         await clean_graph.upsert_nodes(nodes)
         assert await clean_graph.count_nodes() == 10
 
@@ -109,7 +130,7 @@ class TestNeo4jEdgeCRUD:
 class TestNeo4jTraversal:
     @pytest.mark.asyncio
     async def test_neighbors(self, clean_graph: Neo4jGraphStore) -> None:
-        nodes = [make_node(id=f"n{i}", name=f"n{i}") for i in range(4)]
+        nodes = [make_node(id=f"n{i}") for i in range(4)]
         await clean_graph.upsert_nodes(nodes)
         edges = [
             make_edge(source="n0", target="n1"),
@@ -123,7 +144,7 @@ class TestNeo4jTraversal:
 
     @pytest.mark.asyncio
     async def test_traverse(self, clean_graph: Neo4jGraphStore) -> None:
-        nodes = [make_node(id=f"n{i}", name=f"n{i}") for i in range(5)]
+        nodes = [make_node(id=f"n{i}") for i in range(5)]
         await clean_graph.upsert_nodes(nodes)
         edges = [make_edge(source=f"n{i}", target=f"n{i+1}") for i in range(4)]
         await clean_graph.upsert_edges(edges)
@@ -137,8 +158,8 @@ class TestNeo4jSearch:
     @pytest.mark.asyncio
     async def test_find_by_type(self, clean_graph: Neo4jGraphStore) -> None:
         await clean_graph.upsert_nodes([
-            make_node(id="f1", type=NodeType.FUNCTION, name="a"),
-            make_node(id="c1", type=NodeType.CLASS, name="B"),
+            make_node(id="f1", type=NodeType.FUNCTION),
+            make_node(id="c1", type=NodeType.CLASS),
         ])
         funcs = await clean_graph.find_nodes(type=NodeType.FUNCTION)
         assert len(funcs) == 1
@@ -156,8 +177,8 @@ class TestNeo4jSearch:
     @pytest.mark.asyncio
     async def test_find_by_name(self, clean_graph: Neo4jGraphStore) -> None:
         await clean_graph.upsert_nodes([
-            make_node(id="a", name="login"),
-            make_node(id="b", name="logout"),
+            make_node(id="a", structural=StructuralProperties(name="login", file="test.py", signature="", start_line=1, end_line=5, lines=5)),
+            make_node(id="b", structural=StructuralProperties(name="logout", file="test.py", signature="", start_line=1, end_line=5, lines=5)),
         ])
         result = await clean_graph.find_nodes(name="login")
         assert len(result) == 1
@@ -194,7 +215,7 @@ class TestChromaVectorStore:
         results = await vector_store.query(emb, top_k=1)
         assert len(results) == 1
         assert results[0]["id"] == "n1"
-        assert results[0]["score"] > 0.99  # identical vector → ~1.0 cosine similarity
+        assert results[0]["score"] > 0.99
 
     @pytest.mark.asyncio
     async def test_query_with_filter(self, vector_store: ChromaVectorStore) -> None:
@@ -268,5 +289,4 @@ class TestChromaVectorStore:
 
     @pytest.mark.asyncio
     async def test_empty_upsert(self, vector_store: ChromaVectorStore) -> None:
-        # Should not raise
         await vector_store.upsert(ids=[], embeddings=[], metadatas=[])

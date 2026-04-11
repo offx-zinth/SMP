@@ -1,0 +1,42 @@
+[
+  {
+    "name": "smp_enrich",
+    "passed": true,
+    "elapsed_s": 0.034,
+    "result": {
+      "passed": true,
+      "status": "no_metadata"
+    },
+    "error": null
+  },
+  {
+    "name": "smp_enrich_batch",
+    "passed": true,
+    "elapsed_s": 0.014,
+    "result": {
+      "passed": true,
+      "enriched": 0
+    },
+    "error": null
+  },
+  {
+    "name": "smp_enrich_stale",
+    "passed": true,
+    "elapsed_s": 0.013,
+    "result": {
+      "passed": true,
+      "stale_count": 0
+    },
+    "error": null
+  },
+  {
+    "name": "smp_enrich_status",
+    "passed": true,
+    "elapsed_s": 0.027,
+    "result": {
+      "passed": true,
+      "total_nodes": 6
+    },
+    "error": null
+  }
+]

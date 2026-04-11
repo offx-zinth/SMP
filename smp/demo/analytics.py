@@ -2,6 +2,7 @@
 A system with horizontal dependencies to test SMP's cross-domain awareness.
 """
 
+
 # ==========================================
 # THE UTILITY (The "Spider" in the web)
 # ==========================================
@@ -17,7 +18,7 @@ def format_data_value(value: float, unit: str, precision: int) -> str:
 # ==========================================
 def get_temperature_report(celsius: float) -> str:
     """Calculates and formats the local weather report."""
-    fahrenheit = (celsius * 9/5) + 32
+    fahrenheit = (celsius * 9 / 5) + 32
     return format_data_value(fahrenheit, "°F", 2)
 
 
@@ -39,7 +40,7 @@ def check_cpu_voltage(voltage: float) -> str:
         status = "CRITICAL"
     else:
         status = "STABLE"
-    
+
     formatted_v = format_data_value(voltage, "V", 2)
     return f"Status: {status} | Power: {formatted_v}"
 
@@ -48,7 +49,7 @@ def check_cpu_voltage(voltage: float) -> str:
 # SEMANTIC SEARCH TRAP (No names match)
 # ==========================================
 def hide_sensitive_logs() -> None:
-    """This function is responsible for scrubbing private 
+    """This function is responsible for scrubbing private
     user information like emails and tokens from the system output."""
     # We will test if SMP can find this via 'locate' query
     pass

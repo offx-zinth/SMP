@@ -7,7 +7,8 @@ interchangeability across graph and vector stores.
 from __future__ import annotations
 
 import abc
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from smp.core.models import EdgeType, GraphEdge, GraphNode, NodeType
 
@@ -94,7 +95,7 @@ class GraphStore(abc.ABC):
         edge_type: EdgeType,
         depth: int,
         max_nodes: int = 100,
-        direction: str = "outgoing", 
+        direction: str = "outgoing",
     ) -> list[GraphNode]:
         """BFS traversal from *start_id* following *edge_type* edges."""
 
@@ -120,9 +121,63 @@ class GraphStore(abc.ABC):
     async def count_edges(self) -> int:
         """Return total number of edges."""
 
+    # -- SMP(3) Extensions ---------------------------------------------------
+
+    async def find_nodes_by_scope(self, scope: str) -> list[GraphNode]:
+        """Find nodes matching a scope prefix."""
+        return []
+
+    async def get_node_degree(self, node_id: str) -> tuple[int, int]:
+        """Return (in_degree, out_degree) for a node."""
+        return 0, 0
+
+    async def search_nodes(
+        self,
+        query_terms: list[str],
+        match: str = "any",
+        node_types: list[str] | None = None,
+        tags: list[str] | None = None,
+        scope: str | None = None,
+        top_k: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Keyword search across docstrings, descriptions, and tags."""
+        return []
+
+    # -- Session Persistence ---------------------------------------------------
+
+    async def upsert_session(self, session: Any) -> None:
+        """Store or update a session in the graph."""
+        raise NotImplementedError
+
+    async def get_session(self, session_id: str) -> dict[str, Any] | None:
+        """Retrieve a session by ID."""
+        return None
+
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete a session from the graph."""
+        return False
+
+    # -- Lock Persistence ------------------------------------------------------
+
+    async def upsert_lock(self, file_path: str, session_id: str) -> None:
+        """Store a file lock."""
+        raise NotImplementedError
+
+    async def get_lock(self, file_path: str) -> dict[str, Any] | None:
+        """Get lock info for a file."""
+        return None
+
+    async def release_lock(self, file_path: str, session_id: str) -> bool:
+        """Release a file lock."""
+        return False
+
+    async def release_all_locks(self, session_id: str) -> int:
+        """Release all locks held by a session."""
+        return 0
+
     # -- Context manager convenience -----------------------------------------
 
-    async def __aenter__(self) -> "GraphStore":
+    async def __aenter__(self) -> GraphStore:
         await self.connect()
         return self
 
@@ -186,7 +241,7 @@ class VectorStore(abc.ABC):
 
     # -- Context manager convenience -----------------------------------------
 
-    async def __aenter__(self) -> "VectorStore":
+    async def __aenter__(self) -> VectorStore:
         await self.connect()
         return self
 

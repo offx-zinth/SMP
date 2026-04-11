@@ -1,0 +1,60 @@
+[
+  {
+    "name": "smp_diff",
+    "passed": true,
+    "elapsed_s": 0.028,
+    "result": {
+      "passed": true,
+      "result_keys": [
+        "nodes_added",
+        "nodes_removed",
+        "nodes_modified",
+        "relationships_added",
+        "relationships_removed"
+      ]
+    },
+    "error": null
+  },
+  {
+    "name": "smp_plan",
+    "passed": true,
+    "elapsed_s": 0.011,
+    "result": {
+      "passed": true,
+      "result_keys": [
+        "execution_order",
+        "inter_file_conflicts",
+        "external_files_at_risk"
+      ]
+    },
+    "error": null
+  },
+  {
+    "name": "smp_conflict",
+    "passed": true,
+    "elapsed_s": 0.012,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_why",
+    "passed": true,
+    "elapsed_s": 0.067,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_telemetry",
+    "passed": true,
+    "elapsed_s": 0.014,
+    "result": {
+      "passed": true,
+      "status": "not_configured"
+    },
+    "error": null
+  }
+]

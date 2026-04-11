@@ -1,0 +1,30 @@
+[
+  {
+    "name": "smp_sandbox_spawn",
+    "passed": true,
+    "elapsed_s": 0.015,
+    "result": {
+      "passed": true,
+      "sandbox_id": "sandbox_ba788f6d"
+    },
+    "error": null
+  },
+  {
+    "name": "smp_sandbox_execute",
+    "passed": true,
+    "elapsed_s": 0.02,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_sandbox_destroy",
+    "passed": true,
+    "elapsed_s": 0.011,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  }
+]

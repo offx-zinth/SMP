@@ -1,34 +1,30 @@
 from __future__ import annotations
+
 import sys
 
-# 1. Monkey-patch sqlite3 with pysqlite3 for compatibility with newer requirements
 try:
     import pysqlite3
+
     sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
 except ImportError:
-    # Fallback if pysqlite3-binary isn't installed in certain environments
     pass
 
-# 2. Load .env file if present
-from dotenv import load_dotenv
 from pathlib import Path
-load_dotenv(Path(__file__).parent / ".env")
 
-# ... rest of your existing imports follow ...
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).parent / ".env")
 
 import argparse
 import asyncio
-import sys
 import time
-from pathlib import Path
-from typing import Any
 
 from smp.logging import configure_logging, get_logger
 
 log = get_logger(__name__)
 
 DEFAULT_EXTENSIONS = (".py", ".ts", ".tsx", ".js", ".jsx")
-DEFAULT_MAX_FILE_SIZE = 1_000_000  # 1MB
+DEFAULT_MAX_FILE_SIZE = 1_000_000
 
 
 async def ingest_directory(
@@ -41,10 +37,8 @@ async def ingest_directory(
     max_file_size: int = DEFAULT_MAX_FILE_SIZE,
     clear: bool = False,
 ) -> dict[str, int]:
-    """Walk *directory*, parse all matching files, and build the graph.
-
-    Returns a stats dict with counts of files, nodes, edges, and errors.
-    """
+    """Walk *directory*, parse all matching files, and build the graph."""
+    from smp.engine.enricher import StaticSemanticEnricher
     from smp.engine.graph_builder import DefaultGraphBuilder
     from smp.parser.registry import ParserRegistry
     from smp.store.graph.neo4j_store import Neo4jGraphStore
@@ -52,25 +46,11 @@ async def ingest_directory(
     registry = ParserRegistry()
     graph_store = Neo4jGraphStore(uri=neo4j_uri, user=neo4j_user, password=neo4j_password)
     builder = DefaultGraphBuilder(graph_store)
-
-    # Initialise vector store and enricher for semantic embeddings
-    from smp.engine.enricher import LLMSemanticEnricher
-    from smp.store.vector.chroma_store import ChromaVectorStore
-
-    vector_store = ChromaVectorStore(
-        persist_directory=str(Path.home() / ".smp" / "chroma"),
-    )
-    enricher: LLMSemanticEnricher | None = None
-    try:
-        enricher = LLMSemanticEnricher()
-    except RuntimeError:
-        log.warning("ingest_no_enricher", reason="no_api_key")
+    enricher = StaticSemanticEnricher()
 
     await graph_store.connect()
-    await vector_store.connect()
     if clear:
         await graph_store.clear()
-        await vector_store.clear()
         log.warning("graph_cleared")
 
     root = Path(directory).resolve()
@@ -86,7 +66,6 @@ async def ingest_directory(
         if file_path.suffix.lower() not in extensions:
             continue
 
-        # Skip large files
         try:
             size = file_path.stat().st_size
         except OSError:
@@ -96,50 +75,53 @@ async def ingest_directory(
             stats["skipped"] += 1
             continue
 
-        # Skip hidden / vendored dirs
         parts = file_path.relative_to(root).parts
-        if any(p.startswith(".") or p in ("node_modules", "__pycache__", "venv", ".venv", "dist", "build") for p in parts):
+        if any(
+            p.startswith(".") or p in ("node_modules", "__pycache__", "venv", ".venv", "dist", "build") for p in parts
+        ):
             continue
 
         rel_path = str(file_path.relative_to(root))
         doc = registry.parse_file(str(file_path))
-        # Rewrite file_path to be relative
         doc = type(doc)(
             file_path=rel_path,
             language=doc.language,
-            nodes=[type(n)(id=n.id.replace(str(file_path), rel_path), type=n.type, name=n.name, file_path=rel_path, start_line=n.start_line, end_line=n.end_line, signature=n.signature, docstring=n.docstring, semantic=n.semantic, metadata=n.metadata) for n in doc.nodes],
-            edges=[type(e)(source_id=e.source_id.replace(str(file_path), rel_path), target_id=e.target_id.replace(str(file_path), rel_path), type=e.type, metadata=e.metadata) for e in doc.edges],
+            nodes=[
+                type(n)(
+                    id=n.id.replace(str(file_path), rel_path),
+                    type=n.type,
+                    file_path=rel_path,
+                    structural=n.structural,
+                    semantic=n.semantic,
+                )
+                for n in doc.nodes
+            ],
+            edges=[
+                type(e)(
+                    source_id=e.source_id.replace(str(file_path), rel_path),
+                    target_id=e.target_id.replace(str(file_path), rel_path),
+                    type=e.type,
+                    metadata=e.metadata,
+                )
+                for e in doc.edges
+            ],
             errors=doc.errors,
         )
 
         if doc.nodes or doc.edges:
             await builder.ingest_document(doc)
 
-        # Enrich nodes and push to vector store
-        if enricher and doc.nodes:
+        if doc.nodes:
             enriched = await enricher.enrich_batch(doc.nodes)
-            embed_ids: list[str] = []
-            embed_vecs: list[list[float]] = []
-            embed_metas: list[dict[str, Any]] = []
-            embed_docs: list[str] = []
-            for n in enriched:
-                if n.semantic and n.semantic.embedding:
-                    embed_ids.append(n.id)
-                    embed_vecs.append(n.semantic.embedding)
-                    embed_metas.append({"name": n.name, "file_path": rel_path, "type": n.type.value})
-                    embed_docs.append(n.semantic.purpose)
-            if embed_ids:
-                await vector_store.upsert(
-                    ids=embed_ids, embeddings=embed_vecs,
-                    metadatas=embed_metas, documents=embed_docs,
-                )
+            for en in enriched:
+                if en.semantic.status == "enriched":
+                    await graph_store.upsert_node(en)
 
         stats["files"] += 1
         stats["nodes"] += len(doc.nodes)
         stats["edges"] += len(doc.edges)
         stats["errors"] += len(doc.errors)
 
-    # Post-process: resolve cross-file edges that used fallback IDs
     resolved = await builder.resolve_pending_edges()
     if resolved:
         log.info("post_ingest_edges_resolved", count=resolved)
@@ -157,7 +139,6 @@ async def ingest_directory(
     )
 
     await graph_store.close()
-    await vector_store.close()
     return stats
 
 
@@ -180,9 +161,25 @@ def main() -> None:
     serve_cmd.add_argument("--neo4j-uri", default="bolt://localhost:7687")
     serve_cmd.add_argument("--neo4j-user", default="neo4j")
     serve_cmd.add_argument("--neo4j-password", default="123456789$Do")
-    serve_cmd.add_argument("--nv-api-key", default=None, help="NVIDIA NIM API key for embeddings")
-    serve_cmd.add_argument("--enrichment", default="full", choices=["full", "none"], help="Enable/disable LLM enrichment: full (default) or none (hash only)")
+    serve_cmd.add_argument("--safety", action="store_true", help="Enable agent safety protocol")
     serve_cmd.add_argument("--json-log", action="store_true", help="JSON structured logging")
+
+    run_cmd = sub.add_parser("run", help="Run a command in the background")
+    run_cmd.add_argument("name", help="Name for this background process")
+    run_cmd.add_argument("command", nargs="+", help="Command and arguments to run")
+    run_cmd.add_argument("--cwd", type=str, help="Working directory")
+    run_cmd.add_argument("--env", nargs="+", help="Environment variables as KEY=VALUE")
+    run_cmd.add_argument("--restart", action="store_true", help="Restart if already running")
+
+    list_cmd = sub.add_parser("ps", help="List running background processes")
+    list_cmd.add_argument("--name", help="Show specific process details")
+
+    stop_cmd = sub.add_parser("stop", help="Stop a background process")
+    stop_cmd.add_argument("name", help="Name of the process to stop")
+
+    logs_cmd = sub.add_parser("logs", help="View logs for a background process")
+    logs_cmd.add_argument("name", help="Name of the process")
+    logs_cmd.add_argument("--stream", action="store_true", help="Stream new output")
 
     args = parser.parse_args()
     if not args.command:
@@ -192,36 +189,106 @@ def main() -> None:
     configure_logging(json=getattr(args, "json_log", False))
 
     if args.command == "ingest":
-        stats = asyncio.run(ingest_directory(
-            args.directory,
-            neo4j_uri=args.neo4j_uri,
-            neo4j_user=args.neo4j_user,
-            neo4j_password=args.neo4j_password,
-            clear=args.clear,
-            max_file_size=args.max_size,
-        ))
-        print(f"\nIngested {stats['files']} files: {stats['nodes']} nodes, {stats['edges']} edges, {stats['errors']} errors")
+        stats = asyncio.run(
+            ingest_directory(
+                args.directory,
+                neo4j_uri=args.neo4j_uri,
+                neo4j_user=args.neo4j_user,
+                neo4j_password=args.neo4j_password,
+                clear=args.clear,
+                max_file_size=args.max_size,
+            )
+        )
+        print(
+            f"\nIngested {stats['files']} files: {stats['nodes']} nodes, "
+            f"{stats['edges']} edges, {stats['errors']} errors"
+        )
 
     elif args.command == "serve":
-        import uvicorn
         import os
-        # Set env vars so server.py create_app() can read them
+
+        import uvicorn
+
         os.environ["SMP_NEO4J_URI"] = args.neo4j_uri
         os.environ["SMP_NEO4J_USER"] = args.neo4j_user
         os.environ["SMP_NEO4J_PASSWORD"] = args.neo4j_password
-        if args.nv_api_key:
-            os.environ["NV_API"] = args.nv_api_key
-        os.environ["SMP_ENRICHMENT"] = args.enrichment
 
-        # Use the factory to create a fresh app with correct config
         from smp.protocol.server import create_app
+
         application = create_app(
             neo4j_uri=args.neo4j_uri,
             neo4j_user=args.neo4j_user,
             neo4j_password=args.neo4j_password,
-            nv_api_key=args.nv_api_key,
+            safety_enabled=getattr(args, "safety", False),
         )
         uvicorn.run(application, host=args.host, port=args.port)
+
+    elif args.command == "run":
+        from smp.core.background import BackgroundRunner
+
+        env = {}
+        if args.env:
+            for e in args.env:
+                if "=" in e:
+                    key, val = e.split("=", 1)
+                    env[key] = val
+
+        runner = BackgroundRunner()
+        cwd = Path(args.cwd) if args.cwd else None
+
+        try:
+            bg_proc = runner.start(args.name, args.command, cwd=cwd, env=env or None)
+            print(f"Started {args.name}: pid={bg_proc.pid}")
+        except ValueError as e:
+            if args.restart:
+                bg_proc = runner.restart(args.name)
+                print(f"Restarted {args.name}: pid={bg_proc.pid}")
+            else:
+                print(f"Error: {e}")
+                sys.exit(1)
+
+    elif args.command == "ps":
+        from smp.core.background import BackgroundRunner
+
+        runner = BackgroundRunner()
+        if args.name:
+            proc = runner.get(args.name)
+            if proc:
+                print(f"{args.name}: pid={proc['pid']}, running={proc['running']}")
+                print(f"  command: {' '.join(proc['command'])}")
+            else:
+                print(f"Process not found: {args.name}")
+        else:
+            all_procs = runner.list()
+            if all_procs:
+                for name, info in all_procs.items():
+                    print(f"{name}: pid={info['pid']}, running={info['running']}")
+            else:
+                print("No background processes running")
+
+    elif args.command == "stop":
+        from smp.core.background import BackgroundRunner
+
+        runner = BackgroundRunner()
+        if runner.stop(args.name):
+            print(f"Stopped {args.name}")
+        else:
+            print(f"Process not found: {args.name}")
+            sys.exit(1)
+
+    elif args.command == "logs":
+        from smp.core.background import BackgroundRunner
+
+        runner = BackgroundRunner()
+        try:
+            logs = runner.logs(args.name)
+            if logs["stdout"]:
+                print(f"=== stdout ===\n{logs['stdout']}")
+            if logs["stderr"]:
+                print(f"=== stderr ===\n{logs['stderr']}")
+        except ValueError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
 
 
 if __name__ == "__main__":

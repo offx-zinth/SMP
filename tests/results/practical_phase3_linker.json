@@ -1,0 +1,22 @@
+[
+  {
+    "name": "smp_linker_report",
+    "passed": true,
+    "elapsed_s": 0.007,
+    "result": {
+      "passed": true,
+      "status": "not_configured"
+    },
+    "error": null
+  },
+  {
+    "name": "smp_linker_runtime",
+    "passed": true,
+    "elapsed_s": 0.01,
+    "result": {
+      "passed": true,
+      "status": "not_configured"
+    },
+    "error": null
+  }
+]

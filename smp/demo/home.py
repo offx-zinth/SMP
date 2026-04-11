@@ -2,12 +2,14 @@
 Smart Home OS: Testing branch isolation and precision impact analysis.
 """
 
+
 # ==========================================
 # SHARED UTILS (Bottom Layer)
 # ==========================================
 def raw_gpio_write(pin: int, signal: bool):
     """Direct hardware communication layer."""
     print(f"Writing {signal} to pin {pin}")
+
 
 def system_logger(message: str):
     """Generic system-wide logger."""
@@ -20,7 +22,8 @@ def system_logger(message: str):
 def set_bulb_state(bulb_id: str, state: bool, brightness: int):
     """Logic to handle individual smart bulbs."""
     system_logger(f"Bulb {bulb_id} setting to {state} with brightness {brightness}")
-    raw_gpio_write(10, state) # Assuming raw_gpio_write doesn't directly handle brightness in this abstraction
+    raw_gpio_write(10, state)  # Assuming raw_gpio_write doesn't directly handle brightness in this abstraction
+
 
 def api_toggle_lights(request: dict):
     """Top-level API for lighting."""
@@ -39,6 +42,7 @@ def trigger_alarm_siren(active: bool):
     system_logger(f"Siren active: {active}")
     raw_gpio_write(99, active)
 
+
 def api_security_emergency():
     """Top-level API for security."""
     trigger_alarm_siren(True)
@@ -51,7 +55,9 @@ def api_security_emergency():
 def calculate_uptime(boot_time: float) -> float:
     """Pure math logic. No hardware calls."""
     import time
+
     return time.time() - boot_time
+
 
 def get_about_info():
     """Simple metadata return. Isolated from everything."""

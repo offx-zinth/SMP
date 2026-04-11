@@ -2,6 +2,7 @@
 
 from smp.demo.mega_test.services.auth_service import authenticate_user
 
+
 def handle_login_request(request: dict):
     """API handler for POST /login."""
     email = request.get("email", "")

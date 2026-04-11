@@ -1,0 +1,32 @@
+[
+  {
+    "name": "health",
+    "passed": true,
+    "elapsed_s": 0.008,
+    "result": {
+      "passed": true,
+      "status": "ok"
+    },
+    "error": null
+  },
+  {
+    "name": "stats",
+    "passed": true,
+    "elapsed_s": 0.013,
+    "result": {
+      "passed": true,
+      "nodes": 6,
+      "edges": 3
+    },
+    "error": null
+  },
+  {
+    "name": "rpc_endpoint",
+    "passed": true,
+    "elapsed_s": 0.03,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  }
+]

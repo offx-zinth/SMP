@@ -2,6 +2,7 @@
 
 from smp.demo.mega_test.api.circular_a import alpha_func
 
+
 def beta_func():
     """Calls alpha which calls back to beta."""
     result = alpha_func()

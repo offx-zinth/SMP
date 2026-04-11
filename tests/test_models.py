@@ -1,27 +1,41 @@
-"""Tests for core msgspec data models."""
+"""Tests for core msgspec data models — SMP(3) partitioned schema."""
 
 from __future__ import annotations
 
 import msgspec
 
 from smp.core.models import (
+    AnnotateParams,
+    AuditGetParams,
+    CheckpointParams,
+    ContextParams,
+    Document,
+    DryRunParams,
     EdgeType,
+    EnrichBatchParams,
+    EnrichParams,
+    FlowParams,
     GraphEdge,
     GraphNode,
+    GuardCheckParams,
+    ImpactParams,
     JsonRpcError,
     JsonRpcRequest,
     JsonRpcResponse,
-    NodeType,
-    SemanticInfo,
-    Document,
     Language,
-    ParseError,
-    NavigateParams,
-    TraceParams,
-    ContextParams,
-    ImpactParams,
     LocateParams,
-    FlowParams,
+    LockParams,
+    NavigateParams,
+    NodeType,
+    ParseError,
+    RollbackParams,
+    SearchParams,
+    SemanticProperties,
+    SessionCloseParams,
+    SessionOpenParams,
+    StructuralProperties,
+    TagParams,
+    TraceParams,
     UpdateParams,
 )
 from tests.conftest import make_edge, make_node
@@ -32,25 +46,40 @@ class TestGraphNode:
         node = make_node()
         assert node.id == "func_login"
         assert node.type == NodeType.FUNCTION
-        assert node.name == "login"
-        assert node.start_line == 10
+        assert node.structural.name == "login"
+        assert node.structural.start_line == 10
 
     def test_fingerprint(self) -> None:
         node = make_node()
-        assert node.fingerprint() == "src/auth/login.py::FUNCTION::login::10"
+        assert node.fingerprint() == "src/auth/login.py::Function::login::10"
 
     def test_serialization_roundtrip(self) -> None:
-        node = make_node(semantic=SemanticInfo(purpose="Auth", confidence=0.95))
+        node = make_node(
+            semantic=SemanticProperties(
+                docstring="Authenticate user.",
+                status="enriched",
+                source_hash="abc123",
+            )
+        )
         data = msgspec.json.encode(node)
         decoded = msgspec.json.decode(data, type=GraphNode)
         assert decoded.id == node.id
         assert decoded.semantic is not None
-        assert decoded.semantic.purpose == "Auth"
-        assert decoded.semantic.confidence == 0.95
+        assert decoded.semantic.docstring == "Authenticate user."
+        assert decoded.semantic.status == "enriched"
 
-    def test_empty_metadata(self) -> None:
+    def test_structural_partition(self) -> None:
         node = make_node()
-        assert node.metadata == {}
+        assert node.structural.signature == "def login(user: User) -> Token:"
+        assert node.structural.lines == 16
+        assert node.structural.complexity == 0
+
+    def test_semantic_partition(self) -> None:
+        node = make_node()
+        assert node.semantic.status == "enriched"
+        assert node.semantic.docstring == "Authenticate user and return token."
+        assert node.semantic.decorators == []
+        assert node.semantic.tags == []
 
     def test_all_node_types(self) -> None:
         for nt in NodeType:
@@ -78,25 +107,46 @@ class TestGraphEdge:
             assert edge.type == et
 
 
-class TestSemanticInfo:
+class TestStructuralProperties:
+    def test_defaults(self) -> None:
+        sp = StructuralProperties()
+        assert sp.name == ""
+        assert sp.complexity == 0
+        assert sp.parameters == 0
+
     def test_frozen(self) -> None:
-        sem = SemanticInfo(purpose="test", confidence=0.5)
-        assert sem.purpose == "test"
-        # frozen=True means it's immutable
+        sp = StructuralProperties(name="test", lines=10)
         try:
-            sem.purpose = "other"  # type: ignore[misc]
-            assert False, "Should raise"
+            sp.name = "other"  # type: ignore[misc]
         except AttributeError:
             pass
+        else:
+            raise AssertionError("Should raise")
 
-    def test_with_embedding(self) -> None:
-        emb = [0.1, -0.2, 0.3]
-        sem = SemanticInfo(purpose="test", embedding=emb, confidence=1.0)
-        assert sem.embedding == emb
 
-    def test_none_embedding(self) -> None:
-        sem = SemanticInfo(purpose="test", confidence=0.0)
-        assert sem.embedding is None
+class TestSemanticProperties:
+    def test_defaults(self) -> None:
+        sp = SemanticProperties()
+        assert sp.status == "no_metadata"
+        assert sp.docstring == ""
+        assert sp.description is None
+        assert sp.manually_set is False
+        assert sp.source_hash == ""
+
+    def test_with_annotations(self) -> None:
+        from smp.core.models import Annotations
+        sp = SemanticProperties(
+            docstring="Test function.",
+            annotations=Annotations(
+                params={"x": "int"},
+                returns="str",
+                throws=["ValueError"],
+            ),
+        )
+        assert sp.annotations is not None
+        assert sp.annotations.params == {"x": "int"}
+        assert sp.annotations.returns == "str"
+        assert sp.annotations.throws == ["ValueError"]
 
 
 class TestDocument:
@@ -107,7 +157,20 @@ class TestDocument:
         assert doc.errors == []
 
     def test_with_content(self) -> None:
-        nodes = [make_node(), make_node(id="func_logout", name="logout")]
+        nodes = [
+            make_node(),
+            make_node(
+                id="func_logout",
+                structural=StructuralProperties(
+                    name="logout",
+                    file="src/auth/login.py",
+                    signature="def logout():",
+                    start_line=30,
+                    end_line=35,
+                    lines=6,
+                ),
+            ),
+        ]
         edges = [make_edge()]
         doc = Document(
             file_path="src/auth.py",
@@ -154,31 +217,84 @@ class TestJsonRpc:
 
 class TestQueryParams:
     def test_navigate_params(self) -> None:
-        p = NavigateParams(entity_id="x")
-        assert p.depth == 1
+        p = NavigateParams(query="login")
+        assert p.include_relationships is True
 
     def test_trace_params_defaults(self) -> None:
-        p = TraceParams(start_id="x")
-        assert p.edge_type == EdgeType.CALLS
-        assert p.depth == 5
-        assert p.max_nodes == 100
+        p = TraceParams(start="x")
+        assert p.relationship == "CALLS"
+        assert p.depth == 3
 
     def test_context_params(self) -> None:
         p = ContextParams(file_path="test.py", scope="review")
-        assert p.include_semantic is True
+        assert p.scope == "review"
 
     def test_update_params(self) -> None:
         p = UpdateParams(file_path="test.py", content="x = 1")
         assert p.language == Language.PYTHON
 
     def test_impact_params(self) -> None:
-        p = ImpactParams(entity_id="x")
-        assert p.depth == 10
+        p = ImpactParams(entity="x")
+        assert p.change_type == "delete"
 
     def test_locate_params(self) -> None:
-        p = LocateParams(description="find auth logic")
+        p = LocateParams(query="find auth logic")
         assert p.top_k == 5
 
     def test_flow_params(self) -> None:
-        p = FlowParams(start_id="a", end_id="b")
-        assert p.max_depth == 20
+        p = FlowParams(start="a", end="b")
+        assert p.flow_type == "data"
+
+
+class TestSMP3Params:
+    def test_enrich_params(self) -> None:
+        p = EnrichParams(node_id="func_x")
+        assert p.force is False
+
+    def test_enrich_batch_params(self) -> None:
+        p = EnrichBatchParams(scope="package:src/auth")
+        assert p.force is False
+
+    def test_session_open_params(self) -> None:
+        p = SessionOpenParams(agent_id="agent_1", task="fix bug", scope=["src/auth.py"], mode="write")
+        assert p.mode == "write"
+
+    def test_session_close_params(self) -> None:
+        p = SessionCloseParams(session_id="ses_1", status="completed")
+        assert p.status == "completed"
+
+    def test_guard_check_params(self) -> None:
+        p = GuardCheckParams(session_id="ses_1", target="src/auth.py")
+        assert p.target == "src/auth.py"
+
+    def test_dryrun_params(self) -> None:
+        p = DryRunParams(session_id="ses_1", file_path="src/auth.py", proposed_content="x=1")
+        assert p.proposed_content == "x=1"
+
+    def test_checkpoint_params(self) -> None:
+        p = CheckpointParams(session_id="ses_1", files=["src/auth.py"])
+        assert len(p.files) == 1
+
+    def test_rollback_params(self) -> None:
+        p = RollbackParams(session_id="ses_1", checkpoint_id="chk_1")
+        assert p.checkpoint_id == "chk_1"
+
+    def test_search_params(self) -> None:
+        p = SearchParams(query="auth login", match="all")
+        assert p.match == "all"
+
+    def test_annotate_params(self) -> None:
+        p = AnnotateParams(node_id="func_x", description="Handles login", tags=["auth"])
+        assert p.force is False
+
+    def test_tag_params(self) -> None:
+        p = TagParams(scope="package:src/auth", tags=["billing"], action="add")
+        assert p.action == "add"
+
+    def test_lock_params(self) -> None:
+        p = LockParams(session_id="ses_1", files=["src/auth.py"])
+        assert len(p.files) == 1
+
+    def test_audit_get_params(self) -> None:
+        p = AuditGetParams(audit_log_id="aud_1")
+        assert p.audit_log_id == "aud_1"

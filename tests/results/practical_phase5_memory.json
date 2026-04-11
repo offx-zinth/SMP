@@ -1,0 +1,21 @@
+[
+  {
+    "name": "update",
+    "passed": true,
+    "elapsed_s": 0.025,
+    "result": {
+      "passed": true,
+      "nodes": 2
+    },
+    "error": null
+  },
+  {
+    "name": "reindex",
+    "passed": true,
+    "elapsed_s": 0.013,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  }
+]

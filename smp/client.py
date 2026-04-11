@@ -64,7 +64,7 @@ class SMPClient:
             await self._client.aclose()
             self._client = None
 
-    async def __aenter__(self) -> "SMPClient":
+    async def __aenter__(self) -> SMPClient:
         await self.connect()
         return self
 
@@ -97,46 +97,69 @@ class SMPClient:
     # Protocol methods
     # -----------------------------------------------------------------------
 
-    async def navigate(self, entity_id: str, depth: int = 1) -> dict[str, Any]:
+    async def navigate(self, entity_id: str) -> dict[str, Any]:
         """Get a node and its immediate neighbours."""
-        return await self._rpc("smp/navigate", msgspec.to_builtins(NavigateParams(entity_id=entity_id, depth=depth)))
+        return await self._rpc("smp/navigate", msgspec.to_builtins(NavigateParams(query=entity_id)))
 
     async def trace(
         self,
         start_id: str,
         edge_type: str = "CALLS",
-        depth: int = 5,
-        max_nodes: int = 100,
+        depth: int = 3,
+        direction: str = "outgoing",
     ) -> list[dict[str, Any]]:
         """Recursive traversal (e.g. full call graph)."""
-        return await self._rpc("smp/trace", msgspec.to_builtins(TraceParams(
-            start_id=start_id, edge_type=edge_type, depth=depth, max_nodes=max_nodes,
-        )))
+        return await self._rpc(
+            "smp/trace",
+            msgspec.to_builtins(
+                TraceParams(
+                    start=start_id,
+                    relationship=edge_type,
+                    depth=depth,
+                    direction=direction,
+                )
+            ),
+        )
 
     async def get_context(
         self,
         file_path: str,
         scope: str = "edit",
-        include_semantic: bool = True,
+        depth: int = 2,
     ) -> dict[str, Any]:
         """Aggregate structural context for safe editing."""
-        return await self._rpc("smp/context", msgspec.to_builtins(ContextParams(
-            file_path=file_path, scope=scope, include_semantic=include_semantic,
-        )))
+        return await self._rpc(
+            "smp/context",
+            msgspec.to_builtins(
+                ContextParams(
+                    file_path=file_path,
+                    scope=scope,
+                    depth=depth,
+                )
+            ),
+        )
 
-    async def assess_impact(self, entity_id: str, depth: int = 10) -> dict[str, Any]:
+    async def assess_impact(self, entity_id: str, change_type: str = "delete") -> dict[str, Any]:
         """Find blast radius of a change."""
-        return await self._rpc("smp/impact", msgspec.to_builtins(ImpactParams(entity_id=entity_id, depth=depth)))
+        return await self._rpc(
+            "smp/impact", msgspec.to_builtins(ImpactParams(entity=entity_id, change_type=change_type))
+        )
 
-    async def locate(self, description: str, top_k: int = 5) -> list[dict[str, Any]]:
+    async def locate(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
         """Search by semantic intent — vector search mapping back to graph nodes."""
-        return await self._rpc("smp/locate", msgspec.to_builtins(LocateParams(description=description, top_k=top_k)))
+        return await self._rpc("smp/locate", msgspec.to_builtins(LocateParams(query=query, top_k=top_k)))
 
-    async def find_flow(self, start_id: str, end_id: str, max_depth: int = 20) -> list[list[dict[str, Any]]]:
+    async def find_flow(self, start: str, end: str, max_depth: int = 20) -> list[list[dict[str, Any]]]:
         """Find paths between two nodes."""
-        return await self._rpc("smp/flow", msgspec.to_builtins(FlowParams(
-            start_id=start_id, end_id=end_id, max_depth=max_depth,
-        )))
+        return await self._rpc(
+            "smp/flow",
+            msgspec.to_builtins(
+                FlowParams(
+                    start=start,
+                    end=end,
+                )
+            ),
+        )
 
     async def update(
         self,
@@ -150,9 +173,16 @@ class SMPClient:
         reads the file from disk.
         """
         lang = Language(language) if language else Language.PYTHON
-        return await self._rpc("smp/update", msgspec.to_builtins(UpdateParams(
-            file_path=file_path, content=content, language=lang,
-        )))
+        return await self._rpc(
+            "smp/update",
+            msgspec.to_builtins(
+                UpdateParams(
+                    file_path=file_path,
+                    content=content,
+                    language=lang,
+                )
+            ),
+        )
 
     # -----------------------------------------------------------------------
     # Convenience endpoints

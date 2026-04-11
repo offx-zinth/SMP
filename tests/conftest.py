@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-# Monkey-patch sqlite3 with pysqlite3-binary (required by ChromaDB on older systems)
 __import__("pysqlite3")
 import sys
+
 sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
 
-import asyncio
 
 import pytest
 
@@ -16,11 +15,11 @@ from smp.core.models import (
     GraphEdge,
     GraphNode,
     NodeType,
-    SemanticInfo,
+    SemanticProperties,
+    StructuralProperties,
 )
 from smp.store.graph.neo4j_store import Neo4jGraphStore
 from smp.store.vector.chroma_store import ChromaVectorStore
-
 
 # ---------------------------------------------------------------------------
 # Neo4j fixtures
@@ -30,7 +29,6 @@ from smp.store.vector.chroma_store import ChromaVectorStore
 def neo4j_store() -> Neo4jGraphStore:
     """Provide a connected Neo4j graph store (session-scoped)."""
     store = Neo4jGraphStore()
-    # connect/close are async; we use event_loop below
     return store
 
 
@@ -65,21 +63,29 @@ async def vector_store():
 def make_node(
     id: str = "func_login",
     type: NodeType = NodeType.FUNCTION,
-    name: str = "login",
     file_path: str = "src/auth/login.py",
-    start_line: int = 10,
-    end_line: int = 25,
-    signature: str = "def login(user: User) -> Token:",
-    semantic: SemanticInfo | None = None,
+    structural: StructuralProperties | None = None,
+    semantic: SemanticProperties | None = None,
 ) -> GraphNode:
+    if structural is None:
+        structural = StructuralProperties(
+            name="login",
+            file=file_path,
+            signature="def login(user: User) -> Token:",
+            start_line=10,
+            end_line=25,
+            lines=16,
+        )
+    if semantic is None:
+        semantic = SemanticProperties(
+            docstring="Authenticate user and return token.",
+            status="enriched",
+        )
     return GraphNode(
         id=id,
         type=type,
-        name=name,
         file_path=file_path,
-        start_line=start_line,
-        end_line=end_line,
-        signature=signature,
+        structural=structural,
         semantic=semantic,
     )
 

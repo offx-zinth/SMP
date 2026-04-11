@@ -7,7 +7,7 @@ from pathlib import Path
 
 import tree_sitter as ts
 
-from smp.core.models import Document, EdgeType, GraphEdge, GraphNode, Language, NodeType, ParseError
+from smp.core.models import Document, GraphEdge, GraphNode, Language, NodeType, ParseError
 from smp.engine.interfaces import Parser
 from smp.logging import get_logger
 
@@ -78,8 +78,7 @@ class TreeSitterParser(Parser, abc.ABC):
 
     @property
     @abc.abstractmethod
-    def supported_languages(self) -> list[str]:
-        ...
+    def supported_languages(self) -> list[str]: ...
 
     def parse(self, source: str, file_path: str) -> Document:
         lang = detect_language(file_path)
@@ -152,4 +151,3 @@ class TreeSitterParser(Parser, abc.ABC):
             )
         for child in node.children:
             TreeSitterParser._collect_syntax_errors(child, source, errors)
-

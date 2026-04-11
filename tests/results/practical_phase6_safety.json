@@ -1,0 +1,69 @@
+[
+  {
+    "name": "safety_not_enabled",
+    "passed": true,
+    "elapsed_s": 0.013,
+    "result": {
+      "passed": true,
+      "msg": "Safety protocol not enabled"
+    },
+    "error": null
+  },
+  {
+    "name": "session_open",
+    "passed": true,
+    "elapsed_s": 0.018,
+    "result": {
+      "passed": true,
+      "session_id": "ses_2e8a61"
+    },
+    "error": null
+  },
+  {
+    "name": "guard_check",
+    "passed": true,
+    "elapsed_s": 0.012,
+    "result": {
+      "passed": true,
+      "verdict": "blocked"
+    },
+    "error": null
+  },
+  {
+    "name": "lock",
+    "passed": true,
+    "elapsed_s": 0.012,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "checkpoint",
+    "passed": true,
+    "elapsed_s": 0.022,
+    "result": {
+      "passed": true,
+      "checkpoint_id": "chk_a63744"
+    },
+    "error": null
+  },
+  {
+    "name": "dryrun",
+    "passed": true,
+    "elapsed_s": 0.018,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "session_close",
+    "passed": true,
+    "elapsed_s": 0.033,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  }
+]

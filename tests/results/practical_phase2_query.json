@@ -1,0 +1,60 @@
+[
+  {
+    "name": "navigate",
+    "passed": false,
+    "elapsed_s": 0.393,
+    "result": {
+      "passed": false,
+      "error": "No nodes in graph"
+    },
+    "error": null
+  },
+  {
+    "name": "navigate_by_name",
+    "passed": true,
+    "elapsed_s": 0.022,
+    "result": {
+      "passed": true,
+      "note": "no node matching 'login' (endpoint works, no results)"
+    },
+    "error": null
+  },
+  {
+    "name": "context",
+    "passed": true,
+    "elapsed_s": 0.032,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "impact",
+    "passed": false,
+    "elapsed_s": 0.009,
+    "result": {
+      "passed": false,
+      "error": "No nodes"
+    },
+    "error": null
+  },
+  {
+    "name": "locate",
+    "passed": true,
+    "elapsed_s": 0.021,
+    "result": {
+      "passed": true,
+      "match_count": 0
+    },
+    "error": null
+  },
+  {
+    "name": "search",
+    "passed": true,
+    "elapsed_s": 0.023,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  }
+]

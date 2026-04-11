@@ -1,0 +1,74 @@
+[
+  {
+    "name": "smp_navigate",
+    "passed": true,
+    "elapsed_s": 0.346,
+    "result": {
+      "passed": true,
+      "node_id": "test_update.py::File::test_update.py::1"
+    },
+    "error": null
+  },
+  {
+    "name": "smp_navigate_by_name",
+    "passed": true,
+    "elapsed_s": 0.019,
+    "result": {
+      "passed": true,
+      "note": "no match for 'login' but endpoint responded"
+    },
+    "error": null
+  },
+  {
+    "name": "smp_trace",
+    "passed": true,
+    "elapsed_s": 0.035,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_context",
+    "passed": true,
+    "elapsed_s": 0.016,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "smp_impact",
+    "passed": true,
+    "elapsed_s": 0.056,
+    "result": {
+      "passed": true,
+      "result_keys": [
+        "affected_files",
+        "affected_functions",
+        "severity",
+        "recommendations"
+      ]
+    },
+    "error": null
+  },
+  {
+    "name": "smp_locate",
+    "passed": true,
+    "elapsed_s": 0.016,
+    "result": {
+      "passed": true,
+      "match_count": 0
+    },
+    "error": null
+  },
+  {
+    "name": "smp_search",
+    "passed": true,
+    "elapsed_s": 0.011,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  }
+]

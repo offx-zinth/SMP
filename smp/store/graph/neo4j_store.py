@@ -1,58 +1,146 @@
 """Neo4j-backed graph store implementation.
 
 Uses the official ``neo4j`` Python driver with async support.
+Updated for SMP(3) partitioned schema (structural + semantic).
 """
 
 from __future__ import annotations
 
-from typing import Any, Sequence
+from collections.abc import Sequence
+from datetime import UTC, datetime
+from typing import Any
 
 from neo4j import AsyncDriver, AsyncGraphDatabase
 
-from smp.core.models import EdgeType, GraphEdge, GraphNode, NodeType
+from smp.core.models import (
+    Annotations,
+    EdgeType,
+    GraphEdge,
+    GraphNode,
+    InlineComment,
+    NodeType,
+    SemanticProperties,
+    StructuralProperties,
+)
 from smp.logging import get_logger
 from smp.store.interfaces import GraphStore
 
 log = get_logger(__name__)
 
-# Label used on every node so we can enumerate all quickly.
 _ALL_LABEL = "SMPNode"
+_SESSION_LABEL = "SMPSession"
+_LOCK_LABEL = "SMPLck"
 
 
 def _node_to_props(node: GraphNode) -> dict[str, Any]:
-    """Convert a GraphNode to a flat dict suitable for Neo4j properties."""
+    """Convert a GraphNode to flat Neo4j properties."""
     return {
         "id": node.id,
         "type": node.type.value,
-        "name": node.name,
         "file_path": node.file_path,
-        "start_line": node.start_line,
-        "end_line": node.end_line,
-        "signature": node.signature,
-        "docstring": node.docstring,
-        "metadata": str(node.metadata),  # Neo4j stores strings; we JSON-encode later if needed
-        "semantic_purpose": node.semantic.purpose if node.semantic else "",
-        "semantic_confidence": node.semantic.confidence if node.semantic else 0.0,
+        "structural_name": node.structural.name,
+        "structural_file": node.structural.file,
+        "structural_signature": node.structural.signature,
+        "structural_start_line": node.structural.start_line,
+        "structural_end_line": node.structural.end_line,
+        "structural_complexity": node.structural.complexity,
+        "structural_lines": node.structural.lines,
+        "structural_parameters": node.structural.parameters,
+        "semantic_status": node.semantic.status,
+        "semantic_docstring": node.semantic.docstring,
+        "semantic_description": node.semantic.description or "",
+        "semantic_decorators": str(node.semantic.decorators),
+        "semantic_tags": str(node.semantic.tags),
+        "semantic_manually_set": node.semantic.manually_set,
+        "semantic_source_hash": node.semantic.source_hash,
+        "semantic_enriched_at": node.semantic.enriched_at,
+        "semantic_annotations": str(node.semantic.annotations) if node.semantic.annotations else "",
+        "semantic_inline_comments": str(node.semantic.inline_comments),
     }
 
 
 def _record_to_node(record: dict[str, Any]) -> GraphNode:
     """Reconstruct a GraphNode from a Neo4j record."""
-    from smp.core.models import SemanticInfo
+    structural = StructuralProperties(
+        name=record.get("structural_name", ""),
+        file=record.get("structural_file", ""),
+        signature=record.get("structural_signature", ""),
+        start_line=record.get("structural_start_line", 0),
+        end_line=record.get("structural_end_line", 0),
+        complexity=record.get("structural_complexity", 0),
+        lines=record.get("structural_lines", 0),
+        parameters=record.get("structural_parameters", 0),
+    )
 
-    sem_purpose = record.get("semantic_purpose", "")
-    sem_conf = record.get("semantic_confidence", 0.0)
-    semantic = SemanticInfo(purpose=sem_purpose, confidence=sem_conf) if sem_purpose else None
+    annotations_raw = record.get("semantic_annotations", "")
+    annotations: Annotations | None = None
+    if annotations_raw and annotations_raw != "":
+        try:
+            import ast
+
+            parsed = ast.literal_eval(annotations_raw)
+            if isinstance(parsed, dict):
+                annotations = Annotations(
+                    params=parsed.get("params", {}),
+                    returns=parsed.get("returns"),
+                    throws=parsed.get("throws", []),
+                )
+        except (ValueError, SyntaxError):
+            pass
+
+    decorators_raw = record.get("semantic_decorators", "[]")
+    try:
+        import ast
+
+        decorators = ast.literal_eval(decorators_raw) if decorators_raw else []
+        if not isinstance(decorators, list):
+            decorators = []
+    except (ValueError, SyntaxError):
+        decorators = []
+
+    tags_raw = record.get("semantic_tags", "[]")
+    try:
+        import ast
+
+        tags = ast.literal_eval(tags_raw) if tags_raw else []
+        if not isinstance(tags, list):
+            tags = []
+    except (ValueError, SyntaxError):
+        tags = []
+
+    comments_raw = record.get("semantic_inline_comments", "[]")
+    inline_comments: list[InlineComment] = []
+    try:
+        import ast
+
+        parsed_comments = ast.literal_eval(comments_raw) if comments_raw else []
+        if isinstance(parsed_comments, list):
+            for c in parsed_comments:
+                if isinstance(c, dict):
+                    inline_comments.append(InlineComment(line=c.get("line", 0), text=c.get("text", "")))
+                elif isinstance(c, InlineComment):
+                    inline_comments.append(c)
+    except (ValueError, SyntaxError):
+        pass
+
+    semantic = SemanticProperties(
+        status=record.get("semantic_status", "no_metadata"),
+        docstring=record.get("semantic_docstring", ""),
+        description=record.get("semantic_description") or None,
+        inline_comments=inline_comments,
+        decorators=decorators,
+        annotations=annotations,
+        tags=tags,
+        manually_set=record.get("semantic_manually_set", False),
+        source_hash=record.get("semantic_source_hash", ""),
+        enriched_at=record.get("semantic_enriched_at", ""),
+    )
 
     return GraphNode(
         id=record["id"],
         type=NodeType(record["type"]),
-        name=record["name"],
         file_path=record["file_path"],
-        start_line=record.get("start_line", 0),
-        end_line=record.get("end_line", 0),
-        signature=record.get("signature", ""),
-        docstring=record.get("docstring", ""),
+        structural=structural,
         semantic=semantic,
     )
 
@@ -73,18 +161,11 @@ class Neo4jGraphStore(GraphStore):
         self._database = database
         self._driver: AsyncDriver | None = None
 
-    # -- Lifecycle -----------------------------------------------------------
-
     async def connect(self) -> None:
-        self._driver = AsyncGraphDatabase.driver(
-            self._uri, auth=(self._user, self._password)
-        )
+        self._driver = AsyncGraphDatabase.driver(self._uri, auth=(self._user, self._password))
         await self._driver.verify_connectivity()
         log.info("neo4j_connected", uri=self._uri)
-        # Ensure uniqueness constraint on node id
-        await self._execute(
-            f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:{_ALL_LABEL}) REQUIRE n.id IS UNIQUE"
-        )
+        await self._execute(f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:{_ALL_LABEL}) REQUIRE n.id IS UNIQUE")
 
     async def close(self) -> None:
         if self._driver:
@@ -96,23 +177,100 @@ class Neo4jGraphStore(GraphStore):
         await self._execute("MATCH (n) DETACH DELETE n")
         log.warning("neo4j_cleared")
 
-    # -- Node CRUD -----------------------------------------------------------
-
     async def upsert_node(self, node: GraphNode) -> None:
         props = _node_to_props(node)
-        # Neo4j can't have :Label(property) with hyphens in labels; use single label
-        labels = f"{_ALL_LABEL}:{node.type.value}"
         cypher = f"""
-        MERGE (n:{labels} {{id: $id}})
+        MERGE (n:{_ALL_LABEL} {{id: $id}})
         SET n += $props
         """
         await self._execute(cypher, {"id": node.id, "props": props})
         log.debug("node_upserted", node_id=node.id)
 
+    async def upsert_session(self, session: Any) -> None:
+        """Store or update a session in the graph."""
+        props = {
+            "session_id": session.session_id,
+            "agent_id": session.agent_id,
+            "task": session.task,
+            "mode": session.mode,
+            "opened_at": session.opened_at,
+            "expires_at": session.expires_at,
+            "status": session.status,
+            "files_written": session.files_written,
+            "files_read": session.files_read,
+        }
+        cypher = f"""
+        MERGE (n:{_SESSION_LABEL} {{session_id: $session_id}})
+        SET n += $props
+        """
+        await self._execute(cypher, {"session_id": session.session_id, "props": props})
+        log.debug("session_upserted", session_id=session.session_id)
+
+    async def get_session(self, session_id: str) -> dict[str, Any] | None:
+        """Retrieve a session by ID."""
+        cypher = f"MATCH (n:{_SESSION_LABEL} {{session_id: $session_id}}) RETURN n"
+        records = await self._execute(cypher, {"session_id": session_id})
+        if not records:
+            return None
+        return dict(records[0]["n"])
+
+    async def delete_session(self, session_id: str) -> bool:
+        """Delete a session from the graph."""
+        cypher = f"MATCH (n:{_SESSION_LABEL} {{session_id: $session_id}}) DETACH DELETE n RETURN count(n) AS deleted"
+        records = await self._execute(cypher, {"session_id": session_id})
+        deleted = records[0]["deleted"] if records else 0
+        return deleted > 0
+
+    async def upsert_lock(self, file_path: str, session_id: str) -> None:
+        """Store a file lock."""
+        props = {
+            "file_path": file_path,
+            "session_id": session_id,
+            "acquired_at": datetime.now(UTC).isoformat(),
+        }
+        cypher = f"""
+        MERGE (n:{_LOCK_LABEL} {{file_path: $file_path, session_id: $session_id}})
+        SET n += $props
+        """
+        await self._execute(cypher, {"file_path": file_path, "session_id": session_id, "props": props})
+        log.debug("lock_upserted", file_path=file_path, session_id=session_id)
+
+    async def get_lock(self, file_path: str) -> dict[str, Any] | None:
+        """Get lock info for a file."""
+        cypher = f"MATCH (n:{_LOCK_LABEL} {{file_path: $file_path}}) RETURN n LIMIT 1"
+        records = await self._execute(cypher, {"file_path": file_path})
+        if not records:
+            return None
+        return dict(records[0]["n"])
+
+    async def release_lock(self, file_path: str, session_id: str) -> bool:
+        """Release a file lock."""
+        cypher = f"""
+        MATCH (n:{_LOCK_LABEL} {{file_path: $file_path, session_id: $session_id}})
+        DETACH DELETE n
+        RETURN count(n) AS deleted
+        """
+        records = await self._execute(cypher, {"file_path": file_path, "session_id": session_id})
+        deleted = records[0]["deleted"] if records else 0
+        if deleted > 0:
+            log.debug("lock_released", file_path=file_path, session_id=session_id)
+        return deleted > 0
+
+    async def release_all_locks(self, session_id: str) -> int:
+        """Release all locks held by a session."""
+        cypher = f"""
+        MATCH (n:{_LOCK_LABEL} {{session_id: $session_id}})
+        DETACH DELETE n
+        RETURN count(n) AS deleted
+        """
+        records = await self._execute(cypher, {"session_id": session_id})
+        deleted = records[0]["deleted"] if records else 0
+        log.info("locks_released_by_session", session_id=session_id, count=deleted)
+        return deleted
+
     async def upsert_nodes(self, nodes: Sequence[GraphNode]) -> None:
         if not nodes:
             return
-        # Batch using UNWIND for performance
         batch = [_node_to_props(n) for n in nodes]
         cypher = f"""
         UNWIND $batch AS row
@@ -136,8 +294,6 @@ class Neo4jGraphStore(GraphStore):
         return deleted > 0
 
     async def delete_nodes_by_file(self, file_path: str) -> int:
-        # Match both exact path and stem (filename) to handle path variants:
-        #   "core_db.py" and "smp/demo/core_db.py" refer to the same file.
         stem = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
         cypher = f"""
         MATCH (n:{_ALL_LABEL})
@@ -149,8 +305,6 @@ class Neo4jGraphStore(GraphStore):
         deleted = records[0]["deleted"] if records else 0
         log.info("nodes_deleted_by_file", file_path=file_path, deleted=deleted)
         return deleted
-
-    # -- Edge CRUD -----------------------------------------------------------
 
     async def upsert_edge(self, edge: GraphEdge) -> None:
         rel_type = edge.type.value
@@ -173,7 +327,6 @@ class Neo4jGraphStore(GraphStore):
     async def upsert_edges(self, edges: Sequence[GraphEdge]) -> None:
         if not edges:
             return
-        # We must do per-rel-type UNWIND since Cypher can't parameterise rel type
         grouped: dict[str, list[dict[str, Any]]] = {}
         for e in edges:
             grouped.setdefault(e.type.value, []).append(
@@ -215,8 +368,6 @@ class Neo4jGraphStore(GraphStore):
             for rec in records
         ]
 
-    # -- Traversal -----------------------------------------------------------
-
     async def get_neighbors(
         self,
         node_id: str,
@@ -256,8 +407,6 @@ class Neo4jGraphStore(GraphStore):
         records = await self._execute(cypher, {"id": start_id, "max_nodes": max_nodes})
         return [_record_to_node(dict(rec["node"])) for rec in records]
 
-    # -- Search --------------------------------------------------------------
-
     async def find_nodes(
         self,
         *,
@@ -271,14 +420,12 @@ class Neo4jGraphStore(GraphStore):
             conditions.append("n.type = $type")
             params["type"] = type.value
         if file_path:
-            # Match both exact path and stem to handle path variants:
-            #   "core_db.py" and "smp/demo/core_db.py" are the same file.
             stem = file_path.rsplit("/", 1)[-1] if "/" in file_path else file_path
             conditions.append("(n.file_path = $file_path OR n.file_path = $stem)")
             params["file_path"] = file_path
             params["stem"] = stem
         if name:
-            conditions.append("n.name = $name")
+            conditions.append("n.structural_name = $name")
             params["name"] = name
 
         where = " AND ".join(conditions)
@@ -287,7 +434,39 @@ class Neo4jGraphStore(GraphStore):
         records = await self._execute(cypher, params)
         return [_record_to_node(dict(rec["n"])) for rec in records]
 
-    # -- Aggregation ---------------------------------------------------------
+    async def find_nodes_by_scope(self, scope: str) -> list[GraphNode]:
+        """Find nodes matching a scope prefix (package:path or file:path)."""
+        if scope == "full":
+            cypher = f"MATCH (n:{_ALL_LABEL}) RETURN n"
+            records = await self._execute(cypher)
+            return [_record_to_node(dict(rec["n"])) for rec in records]
+
+        if scope.startswith("package:"):
+            prefix = scope[len("package:") :]
+            cypher = f"MATCH (n:{_ALL_LABEL}) WHERE n.file_path STARTS WITH $prefix RETURN n"
+            records = await self._execute(cypher, {"prefix": prefix})
+            return [_record_to_node(dict(rec["n"])) for rec in records]
+
+        if scope.startswith("file:"):
+            fp = scope[len("file:") :]
+            cypher = f"MATCH (n:{_ALL_LABEL}) WHERE n.file_path = $fp RETURN n"
+            records = await self._execute(cypher, {"fp": fp})
+            return [_record_to_node(dict(rec["n"])) for rec in records]
+
+        return []
+
+    async def get_node_degree(self, node_id: str) -> tuple[int, int]:
+        """Return (in_degree, out_degree) for a node."""
+        cypher = f"""
+        MATCH (n:{_ALL_LABEL} {{id: $id}})
+        OPTIONAL MATCH (n)-[out]->()
+        OPTIONAL MATCH ()-[inp]->(n)
+        RETURN count(DISTINCT out) AS out_degree, count(DISTINCT inp) AS in_degree
+        """
+        records = await self._execute(cypher, {"id": node_id})
+        if records:
+            return records[0]["in_degree"], records[0]["out_degree"]
+        return 0, 0
 
     async def count_nodes(self) -> int:
         cypher = f"MATCH (n:{_ALL_LABEL}) RETURN count(n) AS cnt"
@@ -299,7 +478,96 @@ class Neo4jGraphStore(GraphStore):
         records = await self._execute(cypher)
         return records[0]["cnt"] if records else 0
 
-    # -- Internal helpers ----------------------------------------------------
+    async def search_nodes(
+        self,
+        query_terms: list[str],
+        match: str = "any",
+        node_types: list[str] | None = None,
+        tags: list[str] | None = None,
+        scope: str | None = None,
+        top_k: int = 5,
+    ) -> list[dict[str, Any]]:
+        """Keyword search across docstrings, descriptions, and tags."""
+        conditions: list[str] = []
+        params: dict[str, Any] = {}
+
+        if scope and scope != "full":
+            if scope.startswith("package:"):
+                prefix = scope[len("package:") :]
+                conditions.append("n.file_path STARTS WITH $scope_prefix")
+                params["scope_prefix"] = prefix
+            elif scope.startswith("file:"):
+                fp = scope[len("file:") :]
+                conditions.append("n.file_path = $scope_file")
+                params["scope_file"] = fp
+
+        if node_types:
+            placeholders = ", ".join(f"$nt{i}" for i in range(len(node_types)))
+            conditions.append(f"n.type IN [{placeholders}]")
+            for i, nt in enumerate(node_types):
+                params[f"nt{i}"] = nt
+
+        if query_terms:
+            if match == "all":
+                for i, term in enumerate(query_terms):
+                    conditions.append(
+                        f"(n.semantic_docstring CONTAINS $q{i}"
+                        f" OR n.semantic_description CONTAINS $q{i}"
+                        f" OR n.semantic_tags CONTAINS $q{i})"
+                    )
+                    params[f"q{i}"] = term
+            else:
+                or_parts: list[str] = []
+                for i, term in enumerate(query_terms):
+                    or_parts.append(
+                        f"(n.semantic_docstring CONTAINS $q{i}"
+                        f" OR n.semantic_description CONTAINS $q{i}"
+                        f" OR n.semantic_tags CONTAINS $q{i})"
+                    )
+                    params[f"q{i}"] = term
+                if or_parts:
+                    conditions.append(f"({' OR '.join(or_parts)})")
+
+        where = " AND ".join(conditions)
+        where_clause = f"WHERE {where}" if where else ""
+        cypher = f"""
+        MATCH (n:{_ALL_LABEL}) {where_clause}
+        RETURN n
+        LIMIT $limit
+        """
+        params["limit"] = top_k
+        records = await self._execute(cypher, params)
+
+        results: list[dict[str, Any]] = []
+        for rec in records:
+            node = _record_to_node(dict(rec["n"]))
+            matched_on: list[str] = []
+            for term in query_terms:
+                term_lower = term.lower()
+                if term_lower in node.semantic.docstring.lower() and "docstring" not in matched_on:
+                    matched_on.append("docstring")
+                if (
+                    node.semantic.description
+                    and term_lower in node.semantic.description.lower()
+                    and "description" not in matched_on
+                ):
+                    matched_on.append("description")
+                for tag in node.semantic.tags:
+                    if term_lower in tag.lower():
+                        if "tags" not in matched_on:
+                            matched_on.append("tags")
+                        break
+            results.append(
+                {
+                    "node_id": node.id,
+                    "node_type": node.type.value,
+                    "file": node.file_path,
+                    "docstring": node.semantic.docstring,
+                    "tags": node.semantic.tags,
+                    "matched_on": matched_on,
+                }
+            )
+        return results
 
     async def _execute(self, cypher: str, params: dict[str, Any] | None = None) -> list[Any]:
         """Execute a Cypher query and return records."""

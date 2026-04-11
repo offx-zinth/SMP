@@ -3,6 +3,7 @@
 from smp.demo.mega_test.utils.formatter import format_data_value
 from smp.demo.mega_test.utils.logger import log_event
 
+
 def analyze_temperature(raw_temp: float):
     """Analytics function that uses formatter and logger."""
     formatted = format_data_value(raw_temp, "temperature")

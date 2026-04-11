@@ -9,12 +9,14 @@ from __future__ import annotations
 try:
     __import__("pysqlite3")
     import sys
+
     sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
 except ImportError:
     pass
 
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import chromadb
 from chromadb.api.models.Collection import Collection
