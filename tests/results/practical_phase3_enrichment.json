@@ -1,38 +1,38 @@
 [
   {
     "name": "enrich",
-    "passed": false,
-    "elapsed_s": 0.008,
+    "passed": true,
+    "elapsed_s": 0.017,
     "result": {
-      "passed": false,
-      "error": "No nodes"
+      "passed": true,
+      "status": "no_metadata"
     },
     "error": null
   },
   {
     "name": "enrich_batch",
     "passed": true,
-    "elapsed_s": 0.031,
+    "elapsed_s": 0.287,
     "result": {
       "passed": true,
-      "enriched": 0
+      "enriched": 92
     },
     "error": null
   },
   {
     "name": "enrich_status",
     "passed": true,
-    "elapsed_s": 0.041,
+    "elapsed_s": 0.059,
     "result": {
       "passed": true,
-      "total_nodes": 6
+      "total_nodes": 246
     },
     "error": null
   },
   {
     "name": "enrich_stale",
     "passed": true,
-    "elapsed_s": 0.021,
+    "elapsed_s": 0.062,
     "result": {
       "passed": true,
       "stale_count": 0

@@ -2,7 +2,7 @@
   {
     "name": "smp_linker_report",
     "passed": true,
-    "elapsed_s": 0.007,
+    "elapsed_s": 0.009,
     "result": {
       "passed": true,
       "status": "not_configured"
@@ -12,7 +12,7 @@
   {
     "name": "smp_linker_runtime",
     "passed": true,
-    "elapsed_s": 0.01,
+    "elapsed_s": 0.008,
     "result": {
       "passed": true,
       "status": "not_configured"

@@ -2,27 +2,26 @@
   {
     "name": "smp_navigate",
     "passed": true,
-    "elapsed_s": 0.346,
+    "elapsed_s": 0.307,
     "result": {
       "passed": true,
-      "node_id": "test_update.py::File::test_update.py::1"
+      "node_id": "chaos_tests/beta.py::File::chaos_tests/beta.py::1"
     },
     "error": null
   },
   {
     "name": "smp_navigate_by_name",
     "passed": true,
-    "elapsed_s": 0.019,
+    "elapsed_s": 0.072,
     "result": {
-      "passed": true,
-      "note": "no match for 'login' but endpoint responded"
+      "passed": true
     },
     "error": null
   },
   {
     "name": "smp_trace",
     "passed": true,
-    "elapsed_s": 0.035,
+    "elapsed_s": 0.058,
     "result": {
       "passed": true
     },
@@ -31,7 +30,7 @@
   {
     "name": "smp_context",
     "passed": true,
-    "elapsed_s": 0.016,
+    "elapsed_s": 0.025,
     "result": {
       "passed": true
     },
@@ -40,7 +39,7 @@
   {
     "name": "smp_impact",
     "passed": true,
-    "elapsed_s": 0.056,
+    "elapsed_s": 0.031,
     "result": {
       "passed": true,
       "result_keys": [
@@ -55,17 +54,17 @@
   {
     "name": "smp_locate",
     "passed": true,
-    "elapsed_s": 0.016,
+    "elapsed_s": 0.063,
     "result": {
       "passed": true,
-      "match_count": 0
+      "match_count": 3
     },
     "error": null
   },
   {
     "name": "smp_search",
     "passed": true,
-    "elapsed_s": 0.011,
+    "elapsed_s": 0.009,
     "result": {
       "passed": true
     },

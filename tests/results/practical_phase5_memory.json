@@ -2,7 +2,7 @@
   {
     "name": "update",
     "passed": true,
-    "elapsed_s": 0.025,
+    "elapsed_s": 0.117,
     "result": {
       "passed": true,
       "nodes": 2
@@ -12,7 +12,7 @@
   {
     "name": "reindex",
     "passed": true,
-    "elapsed_s": 0.013,
+    "elapsed_s": 0.016,
     "result": {
       "passed": true
     },

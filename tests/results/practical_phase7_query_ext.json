@@ -2,7 +2,7 @@
   {
     "name": "smp_diff",
     "passed": true,
-    "elapsed_s": 0.028,
+    "elapsed_s": 0.308,
     "result": {
       "passed": true,
       "result_keys": [
@@ -18,7 +18,7 @@
   {
     "name": "smp_plan",
     "passed": true,
-    "elapsed_s": 0.011,
+    "elapsed_s": 0.016,
     "result": {
       "passed": true,
       "result_keys": [
@@ -32,7 +32,7 @@
   {
     "name": "smp_conflict",
     "passed": true,
-    "elapsed_s": 0.012,
+    "elapsed_s": 0.014,
     "result": {
       "passed": true
     },
@@ -41,7 +41,7 @@
   {
     "name": "smp_why",
     "passed": true,
-    "elapsed_s": 0.067,
+    "elapsed_s": 0.048,
     "result": {
       "passed": true
     },
@@ -50,7 +50,7 @@
   {
     "name": "smp_telemetry",
     "passed": true,
-    "elapsed_s": 0.014,
+    "elapsed_s": 0.007,
     "result": {
       "passed": true,
       "status": "not_configured"

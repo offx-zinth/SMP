@@ -2,7 +2,7 @@
   {
     "name": "smp_update",
     "passed": true,
-    "elapsed_s": 0.022,
+    "elapsed_s": 0.021,
     "result": {
       "passed": true,
       "nodes": 2
@@ -12,7 +12,7 @@
   {
     "name": "smp_batch_update",
     "passed": true,
-    "elapsed_s": 0.033,
+    "elapsed_s": 0.035,
     "result": {
       "passed": true,
       "updates": 2

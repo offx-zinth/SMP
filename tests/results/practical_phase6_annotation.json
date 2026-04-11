@@ -2,7 +2,7 @@
   {
     "name": "smp_annotate",
     "passed": true,
-    "elapsed_s": 0.043,
+    "elapsed_s": 0.025,
     "result": {
       "passed": true,
       "status": "annotated"
@@ -12,7 +12,7 @@
   {
     "name": "smp_annotate_bulk",
     "passed": true,
-    "elapsed_s": 0.016,
+    "elapsed_s": 0.01,
     "result": {
       "passed": true
     },
@@ -21,7 +21,7 @@
   {
     "name": "smp_tag",
     "passed": true,
-    "elapsed_s": 0.039,
+    "elapsed_s": 0.293,
     "result": {
       "passed": true
     },

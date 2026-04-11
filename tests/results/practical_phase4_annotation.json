@@ -1,18 +1,18 @@
 [
   {
     "name": "annotate",
-    "passed": false,
-    "elapsed_s": 0.014,
+    "passed": true,
+    "elapsed_s": 0.023,
     "result": {
-      "passed": false,
-      "error": "No nodes"
+      "passed": true,
+      "status": "annotated"
     },
     "error": null
   },
   {
     "name": "tag",
     "passed": true,
-    "elapsed_s": 0.032,
+    "elapsed_s": 0.715,
     "result": {
       "passed": true
     },
