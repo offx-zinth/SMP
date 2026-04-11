@@ -54,29 +54,26 @@ SMP/
 ## 🚀 Installation & Setup
 
 ### 1. Requirements
-- **Python 3.11+** (Strictly required for union types and modern async features)
-- **Neo4j 5.x** (Local instance or AuraDB)
+- **Python 3+** (Strictly required for union types and modern async features)
+- **Neo4j 5.x** (Local instance )
 - **ChromaDB** (Managed automatically, but requires modern SQLite)
 
 ### 2. Environment Configuration
 Create a `.env` file in the root directory:
 ```bash
-# Core API Keys
-GEMINI_API_KEY="your-google-api-key"
 
 # Database Configuration
 SMP_NEO4J_URI="bolt://localhost:7687"
 SMP_NEO4J_USER="neo4j"
 SMP_NEO4J_PASSWORD="your-secure-password"
 
-# Operational Modes
-SMP_ENRICHMENT="full"  # Set to "none" to disable LLM enrichment
+
 ```
 
 ### 3. Installation Steps
 ```bash
 # Clone and enter the repo
-git clone https://github.com/your-org/smp.git
+git clone https://github.com/offx-zinth/smp.git
 cd smp
 
 # Create venv with Python 3.11
