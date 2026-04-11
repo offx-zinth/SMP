@@ -208,7 +208,7 @@ class CodingAgent:
         """Step 2 — query SMP for the file's structural context."""
         log.info("agent_step_start", step=2, label="context", workflow_id=workflow_id)
 
-        ctx = await self._client.get_context(file_path, scope="edit", include_semantic=True)
+        ctx = await self._client.get_context(file_path, scope="edit", depth=2)
 
         node_count = len(ctx.get("nodes", []))
         edge_count = len(ctx.get("edges", []))
@@ -239,7 +239,7 @@ class CodingAgent:
             log.info("agent_impact_skip", workflow_id=workflow_id, reason="no_entity_found")
             return {"entity": None, "affected_nodes": [], "total_affected": 0}
 
-        impact = await self._client.assess_impact(target_id, depth=10)
+        impact = await self._client.assess_impact(target_id, change_type="modify")
         affected = impact.get("affected_nodes", [])
 
         # Build a concise summary of downstream effects
@@ -267,7 +267,7 @@ class CodingAgent:
         log.info("agent_step_start", step=4, label="generate", workflow_id=workflow_id)
 
         if not self._llm:
-            raise AgentError("No LLM backend available. Set ZEN_API_KEY to enable edit generation.")
+            raise AgentError("No LLM backend available. Set GEMINI_API_KEY or GOOGLE_API_KEY to enable edit generation.")
 
         system_prompt = self._build_system_prompt()
         user_prompt = self._build_user_prompt(

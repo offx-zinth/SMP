@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from smp.core.models import Document, Language
-from smp.engine.interfaces import Parser
 from smp.logging import get_logger
 from smp.parser.base import TreeSitterParser, detect_language
 
@@ -26,9 +25,11 @@ class ParserRegistry:
 
         if language == Language.PYTHON:
             from smp.parser.python_parser import PythonParser
+
             parser = PythonParser()
         elif language == Language.TYPESCRIPT:
             from smp.parser.typescript_parser import TypeScriptParser
+
             parser = TypeScriptParser()
 
         if parser:
@@ -49,6 +50,7 @@ class ParserRegistry:
         parser = self.get(lang)
         if not parser:
             from smp.core.models import ParseError
+
             return Document(
                 file_path=file_path,
                 language=lang,
@@ -59,6 +61,7 @@ class ParserRegistry:
             source = Path(file_path).read_text(encoding="utf-8", errors="replace")
         except OSError as exc:
             from smp.core.models import ParseError
+
             log.error("file_read_error", file_path=file_path, error=str(exc))
             return Document(
                 file_path=file_path,

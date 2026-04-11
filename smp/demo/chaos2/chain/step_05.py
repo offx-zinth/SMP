@@ -2,6 +2,7 @@
 
 from smp.demo.chaos2.chain.step_06 import step_06
 
+
 def step_05():
     """Calls the next step in the chain."""
     result = step_06()

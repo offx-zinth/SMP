@@ -41,10 +41,29 @@ pytest tests/test_models.py::TestGraphNode
 pytest tests/test_models.py::TestGraphNode::test_defaults
 
 # Run the server
-python -m smp.cli serve
+python3.11 -m smp.cli serve
 
 # Ingest a directory
-python -m smp.cli ingest <directory>
+python3.11 -m smp.cli ingest <directory>
+
+# Run a command in background (returns immediately, agent continues working)
+# IMPORTANT: Use full path to venv python3.11 so it can find the smp module
+python3.11 -m smp.cli run <name> -- .venv/bin/python -m <module> [args...]
+# Example: start server in background
+python3.11 -m smp.cli run myserver -- .venv/bin/python -m smp.cli serve --port 8420
+
+# List running background processes
+python3.11 -m smp.cli ps
+
+# View logs for a background process
+python3.11 -m smp.cli logs <name>
+
+# Stop a background process
+python3.11 -m smp.cli stop <name>
+
+# Restart a background process (use --restart flag when running)
+python3.11 -m smp.cli run <name> -- .venv/bin/python -m <module> --restart
+python3.11 -m smp.cli run <name> -- <command> --restart
 ```
 
 Always run `ruff check .`, `ruff format .`, and `mypy smp/` after making changes.
@@ -60,7 +79,7 @@ Always run `ruff check .`, `ruff format .`, and `mypy smp/` after making changes
 - Use absolute imports for local modules: `from smp.core.models import GraphNode`.
 - Prefer `from X import Y` over `import X` for specific names.
 - Use `list[...]`, `dict[...]`, `set[...]` (builtin generics), never `List`, `Dict`, `Set`.
-- Use `X | Y` for unions (Python 3.11+), not `Optional[X]` or `Union[X, Y]`.
+- Use `X | Y` for unions (python3.11 3.11+), not `Optional[X]` or `Union[X, Y]`.
 
 ### Formatting
 

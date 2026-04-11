@@ -1,8 +1,7 @@
 """Services: Analytics — uses formatter spiderweb."""
 
-from smp.demo.mega_test.core.data_processor import analyze_temperature
-from smp.demo.mega_test.core.data_processor import analyze_voltage
-from smp.demo.mega_test.core.data_processor import calculate_balance
+from smp.demo.mega_test.core.data_processor import analyze_temperature, analyze_voltage, calculate_balance
+
 
 def generate_report():
     """Generates a full analytics report."""

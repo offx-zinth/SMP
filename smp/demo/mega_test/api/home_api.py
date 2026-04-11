@@ -1,7 +1,8 @@
 """API: Home — Smart Home top-level endpoints."""
 
-from smp.demo.mega_test.services.lighting import set_bulb_state
 from smp.demo.mega_test.core.security import trigger_alarm
+from smp.demo.mega_test.services.lighting import set_bulb_state
+
 
 def api_toggle_lights(request: dict):
     """Top-level API for lighting control."""

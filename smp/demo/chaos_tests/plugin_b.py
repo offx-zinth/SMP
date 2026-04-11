@@ -2,6 +2,7 @@
 
 from smp.demo.chaos_tests.contract import validate_payload
 
+
 def process_payment(data: dict):
     """Payment gateway processor."""
     if not validate_payload(data):

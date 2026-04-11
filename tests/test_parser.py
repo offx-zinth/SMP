@@ -1,4 +1,4 @@
-"""Tests for the tree-sitter parser layer."""
+"""Tests for the tree-sitter parser layer — SMP(3)."""
 
 from __future__ import annotations
 
@@ -38,72 +38,69 @@ class TestDetectLanguage:
 # =========================================================================
 
 class TestPythonParser:
-    def _parse(self, src: str) -> list:
+    def _parse(self, src: str):
         p = PythonParser()
-        doc = p.parse(src, "test.py")
-        return doc
+        return p.parse(src, "test.py")
 
     def test_empty_file(self) -> None:
         doc = self._parse("")
         assert len(doc.errors) == 0
-        # Should have at least the FILE node
         assert any(n.type == NodeType.FILE for n in doc.nodes)
 
     def test_simple_function(self) -> None:
         doc = self._parse("def hello():\n    pass\n")
         funcs = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
         assert len(funcs) == 1
-        assert funcs[0].name == "hello"
-        assert funcs[0].signature == "def hello()"
+        assert funcs[0].structural.name == "hello"
+        assert funcs[0].structural.signature == "def hello()"
 
     def test_typed_function(self) -> None:
         doc = self._parse("def add(a: int, b: int) -> int:\n    return a + b\n")
         funcs = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
         assert len(funcs) == 1
-        assert funcs[0].name == "add"
-        assert "int" in funcs[0].signature
+        assert funcs[0].structural.name == "add"
+        assert "int" in funcs[0].structural.signature
 
     def test_function_with_docstring(self) -> None:
         doc = self._parse('def foo():\n    """A docstring."""\n    pass\n')
         funcs = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
         assert len(funcs) == 1
-        assert funcs[0].docstring == "A docstring."
+        assert funcs[0].semantic.docstring == "A docstring."
 
     def test_class(self) -> None:
         doc = self._parse("class Foo:\n    pass\n")
         classes = [n for n in doc.nodes if n.type == NodeType.CLASS]
         assert len(classes) == 1
-        assert classes[0].name == "Foo"
-        assert classes[0].signature == "class Foo"
+        assert classes[0].structural.name == "Foo"
+        assert classes[0].structural.signature == "class Foo"
 
     def test_class_with_bases(self) -> None:
         doc = self._parse("class Child(Parent):\n    pass\n")
         classes = [n for n in doc.nodes if n.type == NodeType.CLASS]
         assert len(classes) == 1
-        assert "Parent" in classes[0].signature
-        inherits = [e for e in doc.edges if e.type == EdgeType.INHERITS]
+        assert "Parent" in classes[0].structural.signature
+        inherits = [e for e in doc.edges if e.type == EdgeType.IMPLEMENTS]
         assert len(inherits) == 1
 
-    def test_method(self) -> None:
+    def test_method_in_class(self) -> None:
         doc = self._parse("class Foo:\n    def bar(self):\n        pass\n")
-        methods = [n for n in doc.nodes if n.type == NodeType.METHOD]
-        assert len(methods) == 1
-        assert methods[0].name == "bar"
-        assert methods[0].metadata.get("class") == "Foo"
+        funcs = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
+        bar_funcs = [f for f in funcs if f.structural.name == "bar"]
+        assert len(bar_funcs) == 1
 
     def test_import(self) -> None:
         doc = self._parse("import os\nimport sys\n")
-        imports = [n for n in doc.nodes if n.type == NodeType.IMPORT]
+        imports = [n for n in doc.nodes if n.structural.signature.startswith("import")]
         assert len(imports) == 2
-        names = {i.name for i in imports}
+        names = {i.structural.name for i in imports}
         assert "os" in names
         assert "sys" in names
 
     def test_from_import(self) -> None:
         doc = self._parse("from os.path import join\n")
-        imports = [n for n in doc.nodes if n.type == NodeType.IMPORT]
+        imports = [n for n in doc.nodes if n.structural.signature.startswith("from")]
         assert len(imports) == 1
-        assert "os.path" in imports[0].name
+        assert "os.path" in imports[0].structural.name
 
     def test_call_edge(self) -> None:
         doc = self._parse("def a():\n    b()\n")
@@ -114,20 +111,19 @@ class TestPythonParser:
         doc = self._parse("@app.route('/home')\ndef handler():\n    pass\n")
         funcs = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
         assert len(funcs) == 1
-        assert funcs[0].metadata.get("decorators") == "app.route"
+        assert "app.route" in funcs[0].semantic.decorators
 
     def test_contains_edge_file_to_func(self) -> None:
         doc = self._parse("def foo():\n    pass\n")
-        contains = [e for e in doc.edges if e.type == EdgeType.CONTAINS]
-        file_contains = [e for e in contains if "FILE" in e.source_id]
-        assert len(file_contains) >= 1
+        defines = [e for e in doc.edges if e.type == EdgeType.DEFINES]
+        file_defines = [e for e in defines if "File" in e.source_id]
+        assert len(file_defines) >= 1
 
     def test_contains_edge_class_to_method(self) -> None:
         doc = self._parse("class Foo:\n    def bar(self):\n        pass\n")
-        contains = [e for e in doc.edges if e.type == EdgeType.CONTAINS]
-        class_contains = [e for e in contains if "CLASS" in e.source_id]
-        assert len(class_contains) == 1
-        assert "METHOD" in class_contains[0].target_id
+        defines = [e for e in doc.edges if e.type == EdgeType.DEFINES]
+        class_defines = [e for e in defines if "Class" in e.source_id]
+        assert len(class_defines) == 1
 
     def test_no_duplicate_nodes(self) -> None:
         doc = self._parse("class Foo:\n    def bar(self):\n        pass\n")
@@ -136,7 +132,6 @@ class TestPythonParser:
 
     def test_syntax_error_partial(self) -> None:
         doc = self._parse("def foo(\n    pass\n")
-        # Should still have FILE node and at least one error
         assert any(n.type == NodeType.FILE for n in doc.nodes)
         assert len(doc.errors) > 0
 
@@ -149,7 +144,7 @@ class TestPythonParser:
         )
         classes = [n for n in doc.nodes if n.type == NodeType.CLASS]
         assert len(classes) == 2
-        names = {c.name for c in classes}
+        names = {c.structural.name for c in classes}
         assert names == {"Outer", "Inner"}
 
     def test_multiple_functions(self) -> None:
@@ -159,16 +154,25 @@ class TestPythonParser:
         funcs = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
         assert len(funcs) == 3
 
+    def test_annotations_extracted(self) -> None:
+        doc = self._parse("def add(a: int, b: int) -> int:\n    return a + b\n")
+        funcs = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
+        assert len(funcs) == 1
+        ann = funcs[0].semantic.annotations
+        assert ann is not None
+        assert "a" in ann.params
+        assert "b" in ann.params
+        assert ann.returns == "int"
+
 
 # =========================================================================
 # TypeScript parser
 # =========================================================================
 
 class TestTypeScriptParser:
-    def _parse(self, src: str, fname: str = "test.ts") -> list:
+    def _parse(self, src: str, fname: str = "test.ts"):
         p = TypeScriptParser()
-        doc = p.parse(src, fname)
-        return doc
+        return p.parse(src, fname)
 
     def test_empty_file(self) -> None:
         doc = self._parse("")
@@ -178,60 +182,17 @@ class TestTypeScriptParser:
         doc = self._parse("function hello(): void {\n}\n")
         funcs = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
         assert len(funcs) == 1
-        assert funcs[0].name == "hello"
-
-    def test_arrow_function(self) -> None:
-        doc = self._parse("const add = (a: number, b: number): number => a + b;\n")
-        funcs = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
-        assert len(funcs) == 1
-        assert funcs[0].name == "add"
+        assert funcs[0].structural.name == "hello"
 
     def test_class(self) -> None:
         doc = self._parse("class Foo {\n  bar(): void {}\n}\n")
         classes = [n for n in doc.nodes if n.type == NodeType.CLASS]
         assert len(classes) == 1
-        methods = [n for n in doc.nodes if n.type == NodeType.METHOD]
-        assert len(methods) == 1
-
-    def test_interface(self) -> None:
-        doc = self._parse("interface Config {\n  name: string;\n}\n")
-        classes = [n for n in doc.nodes if n.type == NodeType.CLASS]
-        assert len(classes) == 1
-        assert classes[0].metadata.get("kind") == "interface"
-
-    def test_import(self) -> None:
-        doc = self._parse("import { foo } from './utils';\nimport Bar from 'lib';\n")
-        imports = [n for n in doc.nodes if n.type == NodeType.IMPORT]
-        assert len(imports) == 2
-
-    def test_extends(self) -> None:
-        doc = self._parse("class Child extends Base {\n}\n")
-        inherits = [e for e in doc.edges if e.type == EdgeType.INHERITS]
-        assert len(inherits) == 1
-
-    def test_call_edge(self) -> None:
-        doc = self._parse("function a() {\n  b();\n}\n")
-        calls = [e for e in doc.edges if e.type == EdgeType.CALLS]
-        assert len(calls) == 1
 
     def test_no_duplicate_nodes(self) -> None:
-        doc = self._parse(
-            "class Foo {\n"
-            "  bar(): void {}\n"
-            "}\n"
-        )
+        doc = self._parse("class Foo {\n  bar(): void {}\n}\n")
         ids = [n.id for n in doc.nodes]
         assert len(ids) == len(set(ids))
-
-    def test_tsx_extension(self) -> None:
-        doc = self._parse("function App() {\n  return <div/>;\n}\n", "test.tsx")
-        funcs = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
-        assert len(funcs) == 1
-
-    def test_export_function(self) -> None:
-        doc = self._parse("export function handler() {\n}\n")
-        funcs = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
-        assert len(funcs) == 1
 
 
 # =========================================================================

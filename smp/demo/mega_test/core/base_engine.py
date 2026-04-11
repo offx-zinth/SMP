@@ -1,5 +1,6 @@
 """Core: Base Engine — Grandfather Ripple layer."""
 
+
 class BaseProcessor:
     """Base processor that everything builds on."""
 

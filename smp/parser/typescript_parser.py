@@ -2,6 +2,7 @@
 
 Extracts functions, classes, interfaces, methods, imports, arrow functions,
 and call edges from TypeScript / TSX source using ``tree-sitter-typescript``.
+Updated for SMP(3) partitioned model.
 """
 
 from __future__ import annotations
@@ -9,9 +10,16 @@ from __future__ import annotations
 import tree_sitter as ts
 import tree_sitter_typescript as tst
 
-from smp.core.models import EdgeType, GraphEdge, GraphNode, NodeType, ParseError
+from smp.core.models import (
+    EdgeType,
+    GraphEdge,
+    GraphNode,
+    NodeType,
+    ParseError,
+    StructuralProperties,
+)
 from smp.logging import get_logger
-from smp.parser.base import TreeSitterParser, is_tsx, make_node_id, node_text, line_range
+from smp.parser.base import TreeSitterParser, is_tsx, line_range, make_node_id, node_text
 
 log = get_logger(__name__)
 
@@ -38,7 +46,6 @@ _QUERY_STRINGS = {
 """,
 }
 
-# Cache compiled queries per language
 _query_cache: dict[str, dict[str, ts.Query]] = {"ts": {}, "tsx": {}}
 
 
@@ -73,15 +80,29 @@ class TypeScriptParser(TreeSitterParser):
 
         file_node = GraphNode(
             id=make_node_id(file_path, NodeType.FILE, file_path, 1),
-            type=NodeType.FILE, name=file_path, file_path=file_path,
-            start_line=1, end_line=root_node.end_point[0] + 1,
+            type=NodeType.FILE,
+            file_path=file_path,
+            structural=StructuralProperties(
+                name=file_path,
+                file=file_path,
+                start_line=1,
+                end_line=root_node.end_point[0] + 1,
+                lines=root_node.end_point[0] + 1,
+            ),
         )
         self._add_node(file_node, nodes, seen_ids)
 
         self._walk_block(
-            root_node, source_bytes, file_path, self._language(file_path),
-            parent_id=file_node.id, class_name=None,
-            nodes=nodes, edges=edges, errors=errors, seen_ids=seen_ids,
+            root_node,
+            source_bytes,
+            file_path,
+            self._language(file_path),
+            parent_id=file_node.id,
+            class_name=None,
+            nodes=nodes,
+            edges=edges,
+            errors=errors,
+            seen_ids=seen_ids,
         )
         log.debug("typescript_parsed", file=file_path, nodes=len(nodes), edges=len(edges), errors=len(errors))
         return nodes, edges, errors
@@ -107,7 +128,6 @@ class TypeScriptParser(TreeSitterParser):
         seen_ids: set[str],
     ) -> None:
         queries = _get_queries(lang)
-        # Top-level declarations
         cursor = ts.QueryCursor(queries["top"])
         for _idx, caps in cursor.matches(block):
             func_nodes = caps.get("func")
@@ -118,15 +138,28 @@ class TypeScriptParser(TreeSitterParser):
 
             if func_nodes:
                 self._process_function(
-                    func_nodes[0], source, file_path, parent_id, class_name,
-                    nodes, edges, seen_ids,
+                    func_nodes[0],
+                    source,
+                    file_path,
+                    parent_id,
+                    class_name,
+                    nodes,
+                    edges,
+                    seen_ids,
                 )
                 continue
 
             if class_nodes:
                 self._process_class(
-                    class_nodes[0], source, file_path, lang, parent_id,
-                    nodes, edges, errors, seen_ids,
+                    class_nodes[0],
+                    source,
+                    file_path,
+                    lang,
+                    parent_id,
+                    nodes,
+                    edges,
+                    errors,
+                    seen_ids,
                 )
                 continue
 
@@ -141,31 +174,51 @@ class TypeScriptParser(TreeSitterParser):
             if export_nodes:
                 for child in export_nodes[0].children:
                     self._walk_block(
-                        child, source, file_path, lang, parent_id, class_name,
-                        nodes, edges, errors, seen_ids,
+                        child,
+                        source,
+                        file_path,
+                        lang,
+                        parent_id,
+                        class_name,
+                        nodes,
+                        edges,
+                        errors,
+                        seen_ids,
                     )
                 continue
 
-        # Arrow functions assigned to variables
         arrow_cursor = ts.QueryCursor(queries["arrow"])
         for _idx, caps in arrow_cursor.matches(block):
             name_nodes = caps.get("name")
             arrow_nodes = caps.get("arrow")
             if name_nodes and arrow_nodes:
                 self._process_arrow_function(
-                    name_nodes[0], arrow_nodes[0], source, file_path,
-                    parent_id, class_name, nodes, edges, seen_ids,
+                    name_nodes[0],
+                    arrow_nodes[0],
+                    source,
+                    file_path,
+                    parent_id,
+                    class_name,
+                    nodes,
+                    edges,
+                    seen_ids,
                 )
 
-        # Methods inside class body
         method_cursor = ts.QueryCursor(queries["method"])
         for _idx, caps in method_cursor.matches(block):
             method_nodes = caps.get("method")
             name_nodes = caps.get("name")
             if method_nodes and name_nodes:
                 self._process_method(
-                    method_nodes[0], name_nodes[0], source, file_path,
-                    parent_id, class_name, nodes, edges, seen_ids,
+                    method_nodes[0],
+                    name_nodes[0],
+                    source,
+                    file_path,
+                    parent_id,
+                    class_name,
+                    nodes,
+                    edges,
+                    seen_ids,
                 )
 
     def _process_function(
@@ -184,22 +237,28 @@ class TypeScriptParser(TreeSitterParser):
             return
         name = node_text(name_node)
         start, end = line_range(func)
-        node_type = NodeType.METHOD if class_name else NodeType.FUNCTION
         sig = self._extract_ts_signature(func, source, name)
-        node_id = make_node_id(file_path, node_type, name, start)
+        node_id = make_node_id(file_path, NodeType.FUNCTION, name, start)
 
-        metadata: dict[str, str] = {}
-        if class_name:
-            metadata["class"] = class_name
+        structural = StructuralProperties(
+            name=name,
+            file=file_path,
+            signature=sig,
+            start_line=start,
+            end_line=end,
+            lines=end - start + 1,
+        )
 
         node = GraphNode(
-            id=node_id, type=node_type, name=name, file_path=file_path,
-            start_line=start, end_line=end, signature=sig, metadata=metadata,
+            id=node_id,
+            type=NodeType.FUNCTION,
+            file_path=file_path,
+            structural=structural,
         )
         if not self._add_node(node, nodes, seen_ids):
             return
 
-        edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.CONTAINS))
+        edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.DEFINES))
         body = func.child_by_field_name("body")
         if body:
             self._extract_calls(body, source, file_path, node_id, nodes, edges)
@@ -218,18 +277,28 @@ class TypeScriptParser(TreeSitterParser):
     ) -> None:
         name = node_text(name_node)
         start, end = line_range(arrow)
-        node_type = NodeType.METHOD if class_name else NodeType.FUNCTION
         sig = f"const {name} = {self._extract_ts_signature(arrow, source, name)}"
-        node_id = make_node_id(file_path, node_type, name, start)
+        node_id = make_node_id(file_path, NodeType.FUNCTION, name, start)
+
+        structural = StructuralProperties(
+            name=name,
+            file=file_path,
+            signature=sig,
+            start_line=start,
+            end_line=end,
+            lines=end - start + 1,
+        )
 
         node = GraphNode(
-            id=node_id, type=node_type, name=name, file_path=file_path,
-            start_line=start, end_line=end, signature=sig,
+            id=node_id,
+            type=NodeType.FUNCTION,
+            file_path=file_path,
+            structural=structural,
         )
         if not self._add_node(node, nodes, seen_ids):
             return
 
-        edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.CONTAINS))
+        edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.DEFINES))
         body = arrow.child_by_field_name("body")
         if body:
             self._extract_calls(body, source, file_path, node_id, nodes, edges)
@@ -249,20 +318,27 @@ class TypeScriptParser(TreeSitterParser):
         name = node_text(name_node)
         start, end = line_range(method)
         sig = self._extract_ts_signature(method, source, name)
-        node_id = make_node_id(file_path, NodeType.METHOD, name, start)
+        node_id = make_node_id(file_path, NodeType.FUNCTION, name, start)
 
-        metadata: dict[str, str] = {}
-        if class_name:
-            metadata["class"] = class_name
+        structural = StructuralProperties(
+            name=name,
+            file=file_path,
+            signature=sig,
+            start_line=start,
+            end_line=end,
+            lines=end - start + 1,
+        )
 
         node = GraphNode(
-            id=node_id, type=NodeType.METHOD, name=name, file_path=file_path,
-            start_line=start, end_line=end, signature=sig, metadata=metadata,
+            id=node_id,
+            type=NodeType.FUNCTION,
+            file_path=file_path,
+            structural=structural,
         )
         if not self._add_node(node, nodes, seen_ids):
             return
 
-        edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.CONTAINS))
+        edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.DEFINES))
         body = method.child_by_field_name("body")
         if body:
             self._extract_calls(body, source, file_path, node_id, nodes, edges)
@@ -289,29 +365,47 @@ class TypeScriptParser(TreeSitterParser):
 
         for child in cls.children:
             if child.type == "class_heritage":
-                # extends_clause is nested under class_heritage
                 for heritage_child in child.children:
                     if heritage_child.type == "extends_clause":
                         for sub in heritage_child.children:
                             if sub.type in ("type_identifier", "identifier"):
                                 base_name = node_text(sub)
                                 sig += f" extends {base_name}"
-                                base_id = make_node_id(file_path, NodeType.CLASS, base_name, 0)
-                                edges.append(GraphEdge(source_id=node_id, target_id=base_id, type=EdgeType.INHERITS))
+                                base_id = make_node_id(file_path, NodeType.INTERFACE, base_name, 0)
+                                edges.append(GraphEdge(source_id=node_id, target_id=base_id, type=EdgeType.IMPLEMENTS))
+
+        structural = StructuralProperties(
+            name=name,
+            file=file_path,
+            signature=sig,
+            start_line=start,
+            end_line=end,
+            lines=end - start + 1,
+        )
 
         node = GraphNode(
-            id=node_id, type=NodeType.CLASS, name=name, file_path=file_path,
-            start_line=start, end_line=end, signature=sig,
+            id=node_id,
+            type=NodeType.CLASS,
+            file_path=file_path,
+            structural=structural,
         )
         if not self._add_node(node, nodes, seen_ids):
             return
 
-        edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.CONTAINS))
+        edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.DEFINES))
         body = cls.child_by_field_name("body")
         if body:
             self._walk_block(
-                body, source, file_path, lang, parent_id=node_id, class_name=name,
-                nodes=nodes, edges=edges, errors=errors, seen_ids=seen_ids,
+                body,
+                source,
+                file_path,
+                lang,
+                parent_id=node_id,
+                class_name=name,
+                nodes=nodes,
+                edges=edges,
+                errors=errors,
+                seen_ids=seen_ids,
             )
 
     def _process_interface(
@@ -329,17 +423,27 @@ class TypeScriptParser(TreeSitterParser):
             return
         name = node_text(name_node)
         start, end = line_range(iface)
-        node_id = make_node_id(file_path, NodeType.CLASS, name, start)
+        node_id = make_node_id(file_path, NodeType.INTERFACE, name, start)
+
+        structural = StructuralProperties(
+            name=name,
+            file=file_path,
+            signature=f"interface {name}",
+            start_line=start,
+            end_line=end,
+            lines=end - start + 1,
+        )
 
         node = GraphNode(
-            id=node_id, type=NodeType.CLASS, name=name, file_path=file_path,
-            start_line=start, end_line=end, signature=f"interface {name}",
-            metadata={"kind": "interface"},
+            id=node_id,
+            type=NodeType.INTERFACE,
+            file_path=file_path,
+            structural=structural,
         )
         if not self._add_node(node, nodes, seen_ids):
             return
 
-        edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.CONTAINS))
+        edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.DEFINES))
 
     def _process_import(
         self,
@@ -355,23 +459,24 @@ class TypeScriptParser(TreeSitterParser):
         source_node = imp.child_by_field_name("source")
         module = node_text(source_node) if source_node else text
 
-        node_id = make_node_id(file_path, NodeType.IMPORT, module, start)
+        node_id = make_node_id(file_path, NodeType.FILE, module, start)
+        structural = StructuralProperties(
+            name=module,
+            file=file_path,
+            signature=text,
+            start_line=start,
+            end_line=end,
+            lines=end - start + 1,
+        )
+
         node = GraphNode(
-            id=node_id, type=NodeType.IMPORT, name=module,
-            file_path=file_path, start_line=start, end_line=end, signature=text,
+            id=node_id,
+            type=NodeType.FILE,
+            file_path=file_path,
+            structural=structural,
         )
         nodes.append(node)
         edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.IMPORTS))
-
-    def _extract_ts_decorators(self, node: ts.Node) -> list[str]:
-        names: list[str] = []
-        for child in node.children:
-            if child.type == "decorator":
-                text = node_text(child).lstrip("@").strip()
-                if "(" in text:
-                    text = text[: text.index("(")]
-                names.append(text)
-        return names
 
     def _extract_calls(
         self,
@@ -398,10 +503,14 @@ class TypeScriptParser(TreeSitterParser):
             if edge_key in seen_edges:
                 continue
             seen_edges.add(edge_key)
-            edges.append(GraphEdge(
-                source_id=caller_id, target_id=target_id,
-                type=EdgeType.CALLS, metadata={"line": str(start)},
-            ))
+            edges.append(
+                GraphEdge(
+                    source_id=caller_id,
+                    target_id=target_id,
+                    type=EdgeType.CALLS,
+                    metadata={"line": str(start)},
+                )
+            )
 
     def _extract_ts_signature(self, node: ts.Node, source: bytes, name: str) -> str:
         params_node = node.child_by_field_name("parameters")

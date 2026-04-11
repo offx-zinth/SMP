@@ -17,7 +17,7 @@ __import__("pysqlite3")
 import sys
 sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
 
-from smp.core.models import EdgeType, GraphEdge, GraphNode, NodeType
+from smp.core.models import EdgeType, GraphEdge, GraphNode, NodeType, SemanticProperties, StructuralProperties
 from smp.client import SMPClient, SMPClientError
 from smp.engine.enricher import LLMSemanticEnricher
 from smp.engine.graph_builder import DefaultGraphBuilder
@@ -41,9 +41,27 @@ def server():
         await graph.connect()
         await graph.clear()
         nodes = [
-            GraphNode(id="f.py::FILE::f.py::1", type=NodeType.FILE, name="f.py", file_path="f.py", start_line=1, end_line=20),
-            GraphNode(id="f.py::FUNCTION::alpha::3", type=NodeType.FUNCTION, name="alpha", file_path="f.py", start_line=3, end_line=8, docstring="Alpha function."),
-            GraphNode(id="f.py::FUNCTION::beta::10", type=NodeType.FUNCTION, name="beta", file_path="f.py", start_line=10, end_line=15),
+            GraphNode(
+                id="f.py::FILE::f.py::1",
+                type=NodeType.FILE,
+                file_path="f.py",
+                structural=StructuralProperties(name="f.py", file="f.py", start_line=1, end_line=20),
+                semantic=SemanticProperties(docstring=""),
+            ),
+            GraphNode(
+                id="f.py::FUNCTION::alpha::3",
+                type=NodeType.FUNCTION,
+                file_path="f.py",
+                structural=StructuralProperties(name="alpha", file="f.py", start_line=3, end_line=8),
+                semantic=SemanticProperties(docstring="Alpha function."),
+            ),
+            GraphNode(
+                id="f.py::FUNCTION::beta::10",
+                type=NodeType.FUNCTION,
+                file_path="f.py",
+                structural=StructuralProperties(name="beta", file="f.py", start_line=10, end_line=15),
+                semantic=SemanticProperties(docstring="Beta function."),
+            ),
         ]
         edges = [
             GraphEdge(source_id="f.py::FILE::f.py::1", target_id="f.py::FUNCTION::alpha::3", type=EdgeType.CONTAINS),

@@ -1,0 +1,64 @@
+[
+  {
+    "name": "navigate",
+    "passed": true,
+    "elapsed_s": 0.362,
+    "result": {
+      "passed": true,
+      "node_id": "chaos_tests/beta.py::File::chaos_tests/beta.py::1"
+    },
+    "error": null
+  },
+  {
+    "name": "navigate_by_name",
+    "passed": true,
+    "elapsed_s": 0.233,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "context",
+    "passed": true,
+    "elapsed_s": 0.187,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  },
+  {
+    "name": "impact",
+    "passed": true,
+    "elapsed_s": 0.063,
+    "result": {
+      "passed": true,
+      "result_keys": [
+        "affected_files",
+        "affected_functions",
+        "severity",
+        "recommendations"
+      ]
+    },
+    "error": null
+  },
+  {
+    "name": "locate",
+    "passed": true,
+    "elapsed_s": 0.1,
+    "result": {
+      "passed": true,
+      "match_count": 3
+    },
+    "error": null
+  },
+  {
+    "name": "search",
+    "passed": true,
+    "elapsed_s": 0.032,
+    "result": {
+      "passed": true
+    },
+    "error": null
+  }
+]

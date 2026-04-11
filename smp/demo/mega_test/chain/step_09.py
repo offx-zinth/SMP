@@ -3,6 +3,7 @@
 from smp.demo.mega_test.chain.step_10 import step_10
 from smp.demo.mega_test.utils.formatter import format_data_value
 
+
 def step_09():
     """Calls the next step and formats data."""
     result = step_10()

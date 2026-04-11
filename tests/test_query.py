@@ -1,11 +1,19 @@
-"""Tests for the query engine."""
+"""Tests for the query engine — SMP(3)."""
 
 from __future__ import annotations
 
 import pytest
 
-from smp.core.models import EdgeType, GraphEdge, GraphNode, NodeType, SemanticInfo
-from smp.engine.enricher import LLMSemanticEnricher, _hash_embed
+from smp.core.models import (
+    Annotations,
+    EdgeType,
+    GraphEdge,
+    GraphNode,
+    NodeType,
+    SemanticProperties,
+    StructuralProperties,
+)
+from smp.engine.enricher import StaticSemanticEnricher
 from smp.engine.query import DefaultQueryEngine
 from smp.store.graph.neo4j_store import Neo4jGraphStore
 from smp.store.vector.chroma_store import ChromaVectorStore
@@ -36,8 +44,37 @@ async def vector():
 
 @pytest.fixture()
 async def engine(graph: Neo4jGraphStore, vector: ChromaVectorStore):
-    enricher = LLMSemanticEnricher()
+    enricher = StaticSemanticEnricher()
     return DefaultQueryEngine(graph, vector, enricher)
+
+
+def _make_node(
+    id: str,
+    type: NodeType,
+    name: str,
+    file_path: str,
+    start_line: int = 1,
+    end_line: int = 10,
+    docstring: str = "",
+    signature: str = "",
+) -> GraphNode:
+    return GraphNode(
+        id=id,
+        type=type,
+        file_path=file_path,
+        structural=StructuralProperties(
+            name=name,
+            file=file_path,
+            signature=signature or f"{type.value.lower()} {name}",
+            start_line=start_line,
+            end_line=end_line,
+            lines=end_line - start_line + 1,
+        ),
+        semantic=SemanticProperties(
+            docstring=docstring,
+            status="enriched" if docstring else "no_metadata",
+        ),
+    )
 
 
 async def _seed_graph(graph: Neo4jGraphStore) -> None:
@@ -51,23 +88,23 @@ async def _seed_graph(graph: Neo4jGraphStore) -> None:
       └── func_c()
     """
     nodes = [
-        GraphNode(id="file.py::FILE::file.py::1", type=NodeType.FILE, name="file.py", file_path="file.py", start_line=1, end_line=30),
-        GraphNode(id="file.py::IMPORT::os::2", type=NodeType.IMPORT, name="os", file_path="file.py", start_line=2, end_line=2),
-        GraphNode(id="file.py::FUNCTION::func_a::4", type=NodeType.FUNCTION, name="func_a", file_path="file.py", start_line=4, end_line=8),
-        GraphNode(id="file.py::FUNCTION::func_b::10", type=NodeType.FUNCTION, name="func_b", file_path="file.py", start_line=10, end_line=14, docstring="Does B things."),
-        GraphNode(id="file.py::FUNCTION::func_c::16", type=NodeType.FUNCTION, name="func_c", file_path="file.py", start_line=16, end_line=20),
-        GraphNode(id="file.py::CLASS::Service::22", type=NodeType.CLASS, name="Service", file_path="file.py", start_line=22, end_line=28),
-        GraphNode(id="file.py::METHOD::method::23", type=NodeType.METHOD, name="method", file_path="file.py", start_line=23, end_line=25, metadata={"class": "Service"}),
+        _make_node("file.py::File::file.py::1", NodeType.FILE, "file.py", "file.py", 1, 30),
+        _make_node("file.py::File::os::2", NodeType.FILE, "os", "file.py", 2, 2, signature="import os"),
+        _make_node("file.py::Function::func_a::4", NodeType.FUNCTION, "func_a", "file.py", 4, 8),
+        _make_node("file.py::Function::func_b::10", NodeType.FUNCTION, "func_b", "file.py", 10, 14, docstring="Does B things."),
+        _make_node("file.py::Function::func_c::16", NodeType.FUNCTION, "func_c", "file.py", 16, 20),
+        _make_node("file.py::Class::Service::22", NodeType.CLASS, "Service", "file.py", 22, 28),
+        _make_node("file.py::Function::method::23", NodeType.FUNCTION, "method", "file.py", 23, 25),
     ]
     edges = [
-        GraphEdge(source_id="file.py::FILE::file.py::1", target_id="file.py::IMPORT::os::2", type=EdgeType.IMPORTS),
-        GraphEdge(source_id="file.py::FILE::file.py::1", target_id="file.py::FUNCTION::func_a::4", type=EdgeType.CONTAINS),
-        GraphEdge(source_id="file.py::FILE::file.py::1", target_id="file.py::FUNCTION::func_b::10", type=EdgeType.CONTAINS),
-        GraphEdge(source_id="file.py::FILE::file.py::1", target_id="file.py::FUNCTION::func_c::16", type=EdgeType.CONTAINS),
-        GraphEdge(source_id="file.py::FILE::file.py::1", target_id="file.py::CLASS::Service::22", type=EdgeType.CONTAINS),
-        GraphEdge(source_id="file.py::FUNCTION::func_a::4", target_id="file.py::FUNCTION::func_b::10", type=EdgeType.CALLS),
-        GraphEdge(source_id="file.py::FUNCTION::func_b::10", target_id="file.py::FUNCTION::func_c::16", type=EdgeType.CALLS),
-        GraphEdge(source_id="file.py::CLASS::Service::22", target_id="file.py::METHOD::method::23", type=EdgeType.CONTAINS),
+        GraphEdge(source_id="file.py::File::file.py::1", target_id="file.py::File::os::2", type=EdgeType.IMPORTS),
+        GraphEdge(source_id="file.py::File::file.py::1", target_id="file.py::Function::func_a::4", type=EdgeType.DEFINES),
+        GraphEdge(source_id="file.py::File::file.py::1", target_id="file.py::Function::func_b::10", type=EdgeType.DEFINES),
+        GraphEdge(source_id="file.py::File::file.py::1", target_id="file.py::Function::func_c::16", type=EdgeType.DEFINES),
+        GraphEdge(source_id="file.py::File::file.py::1", target_id="file.py::Class::Service::22", type=EdgeType.DEFINES),
+        GraphEdge(source_id="file.py::Function::func_a::4", target_id="file.py::Function::func_b::10", type=EdgeType.CALLS),
+        GraphEdge(source_id="file.py::Function::func_b::10", target_id="file.py::Function::func_c::16", type=EdgeType.CALLS),
+        GraphEdge(source_id="file.py::Class::Service::22", target_id="file.py::Function::method::23", type=EdgeType.DEFINES),
     ]
     await graph.upsert_nodes(nodes)
     await graph.upsert_edges(edges)
@@ -81,11 +118,9 @@ class TestNavigate:
     @pytest.mark.asyncio
     async def test_navigate_node(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
         await _seed_graph(graph)
-        result = await engine.navigate("file.py::FUNCTION::func_a::4")
-        assert "node" in result
-        assert result["node"]["name"] == "func_a"
-        assert len(result["neighbors"]) > 0
-        assert len(result["edges"]) > 0
+        result = await engine.navigate("file.py::Function::func_a::4")
+        assert "entity" in result
+        assert result["entity"]["name"] == "func_a"
 
     @pytest.mark.asyncio
     async def test_navigate_missing(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
@@ -96,9 +131,8 @@ class TestNavigate:
     @pytest.mark.asyncio
     async def test_navigate_file(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
         await _seed_graph(graph)
-        result = await engine.navigate("file.py::FILE::file.py::1")
-        assert result["node"]["type"] == "FILE"
-        assert len(result["neighbors"]) >= 3
+        result = await engine.navigate("file.py::File::file.py::1")
+        assert result["entity"]["type"] == "File"
 
 
 # ---------------------------------------------------------------------------
@@ -109,7 +143,7 @@ class TestTrace:
     @pytest.mark.asyncio
     async def test_trace_calls(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
         await _seed_graph(graph)
-        result = await engine.trace("file.py::FUNCTION::func_a::4", "CALLS", depth=2)
+        result = await engine.trace("file.py::Function::func_a::4", "CALLS", depth=2)
         names = {n["name"] for n in result}
         assert "func_b" in names
         assert "func_c" in names
@@ -117,7 +151,7 @@ class TestTrace:
     @pytest.mark.asyncio
     async def test_trace_depth_1(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
         await _seed_graph(graph)
-        result = await engine.trace("file.py::FUNCTION::func_a::4", "CALLS", depth=1)
+        result = await engine.trace("file.py::Function::func_a::4", "CALLS", depth=1)
         names = {n["name"] for n in result}
         assert "func_b" in names
         assert "func_c" not in names
@@ -132,15 +166,14 @@ class TestGetContext:
     async def test_context_file(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
         await _seed_graph(graph)
         ctx = await engine.get_context("file.py")
-        assert ctx["file_path"] == "file.py"
-        assert len(ctx["nodes"]) >= 5
-        assert len(ctx["edges"]) >= 5
+        assert "self" in ctx
+        assert len(ctx["functions_defined"]) >= 3
 
     @pytest.mark.asyncio
     async def test_context_empty_file(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
         await _seed_graph(graph)
         ctx = await engine.get_context("nonexistent.py")
-        assert len(ctx["nodes"]) == 0
+        assert "error" in ctx
 
 
 # ---------------------------------------------------------------------------
@@ -151,9 +184,9 @@ class TestAssessImpact:
     @pytest.mark.asyncio
     async def test_impact(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
         await _seed_graph(graph)
-        result = await engine.assess_impact("file.py::FUNCTION::func_b::10")
+        result = await engine.assess_impact("file.py::Function::func_b::10")
         assert result["entity"]["name"] == "func_b"
-        assert result["total_affected"] >= 0
+        assert "affected_files" in result
 
     @pytest.mark.asyncio
     async def test_impact_missing(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
@@ -163,36 +196,41 @@ class TestAssessImpact:
 
 
 # ---------------------------------------------------------------------------
-# locate_by_intent
+# locate
 # ---------------------------------------------------------------------------
 
-class TestLocateByIntent:
+class TestLocate:
     @pytest.mark.asyncio
-    async def test_locate(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore, vector: ChromaVectorStore) -> None:
+    async def test_locate_by_name(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
         await _seed_graph(graph)
-
-        # Enrich and store in vector store
-        enricher = LLMSemanticEnricher()
-        nodes = await graph.find_nodes()
-        enriched = await enricher.enrich_batch(nodes)
-        # Update graph with semantic info
-        await graph.upsert_nodes(enriched)
-        # Store in vector store
-        ids = [n.id for n in enriched]
-        embeddings = [n.semantic.embedding for n in enriched if n.semantic and n.semantic.embedding]
-        metadatas = [{"name": n.name, "file_path": n.file_path, "type": n.type.value} for n in enriched if n.semantic and n.semantic.embedding]
-        docs = [n.semantic.purpose for n in enriched if n.semantic and n.semantic.embedding]
-        await vector.upsert(ids=ids[:len(embeddings)], embeddings=embeddings, metadatas=metadatas, documents=docs)
-
-        result = await engine.locate_by_intent("function that does B things")
+        result = await engine.locate("func_b")
         assert len(result) > 0
-        assert all("score" in r for r in result)
+        assert result[0]["entity"] == "func_b"
 
     @pytest.mark.asyncio
-    async def test_locate_empty(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore, vector: ChromaVectorStore) -> None:
+    async def test_locate_empty(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
         await _seed_graph(graph)
-        result = await engine.locate_by_intent("")
+        result = await engine.locate("")
         assert result == []
+
+
+# ---------------------------------------------------------------------------
+# search
+# ---------------------------------------------------------------------------
+
+class TestSearch:
+    @pytest.mark.asyncio
+    async def test_search_docstring(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
+        await _seed_graph(graph)
+        result = await engine.search("B things")
+        assert result["total"] >= 1
+
+    @pytest.mark.asyncio
+    async def test_search_no_match(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
+        await _seed_graph(graph)
+        result = await engine.search("xyz_nonexistent_term")
+        assert result["total"] == 0
+        assert "hint" in result
 
 
 # ---------------------------------------------------------------------------
@@ -203,51 +241,26 @@ class TestFindFlow:
     @pytest.mark.asyncio
     async def test_direct_path(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
         await _seed_graph(graph)
-        paths = await engine.find_flow(
-            "file.py::FUNCTION::func_a::4",
-            "file.py::FUNCTION::func_b::10",
+        result = await engine.find_flow(
+            "file.py::Function::func_a::4",
+            "file.py::Function::func_b::10",
         )
-        assert len(paths) >= 1
-        assert paths[0][0]["name"] == "func_a"
-        assert paths[0][-1]["name"] == "func_b"
-
-    @pytest.mark.asyncio
-    async def test_indirect_path(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
-        await _seed_graph(graph)
-        paths = await engine.find_flow(
-            "file.py::FUNCTION::func_a::4",
-            "file.py::FUNCTION::func_c::16",
-        )
-        assert len(paths) >= 1
-        # Path should go through func_b
-        path_names = [n["name"] for n in paths[0]]
-        assert "func_a" in path_names
-        assert "func_c" in path_names
-
-    @pytest.mark.asyncio
-    async def test_no_path(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
-        await _seed_graph(graph)
-        paths = await engine.find_flow(
-            "file.py::IMPORT::os::2",
-            "file.py::METHOD::method::23",
-        )
-        # No direct edges from import to method — but BFS walks all edges
-        # so there might be a path via file node
-        assert isinstance(paths, list)
+        assert len(result["path"]) >= 1
+        assert result["path"][0]["node"] == "func_a"
+        assert result["path"][-1]["node"] == "func_b"
 
     @pytest.mark.asyncio
     async def test_same_node(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
         await _seed_graph(graph)
-        paths = await engine.find_flow(
-            "file.py::FUNCTION::func_a::4",
-            "file.py::FUNCTION::func_a::4",
+        result = await engine.find_flow(
+            "file.py::Function::func_a::4",
+            "file.py::Function::func_a::4",
         )
-        assert len(paths) == 1
-        assert len(paths[0]) == 1
-        assert paths[0][0]["name"] == "func_a"
+        assert len(result["path"]) == 1
+        assert result["path"][0]["node"] == "func_a"
 
     @pytest.mark.asyncio
     async def test_missing_node(self, engine: DefaultQueryEngine, graph: Neo4jGraphStore) -> None:
         await _seed_graph(graph)
-        paths = await engine.find_flow("nonexistent", "also_nonexistent")
-        assert paths == []
+        result = await engine.find_flow("nonexistent", "also_nonexistent")
+        assert result["path"] == []

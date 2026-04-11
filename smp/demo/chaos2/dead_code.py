@@ -1,5 +1,6 @@
 """Dead code module — function never called anywhere."""
 
+
 def orphan_complex_logic(data: dict) -> dict:
     """A complex function that nobody calls.
 
