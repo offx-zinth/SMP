@@ -538,6 +538,24 @@ class AuditLogger:
         )
         log_entry.events.append(event)
 
+    async def recover_session(self, session_id: str) -> dict[str, Any] | None:
+        """Recover a session from persistent storage."""
+        session = await self._load_session(session_id)
+        if not session:
+            return None
+        self._sessions[session_id] = session
+        log.info("session_recovered", session_id=session_id)
+        return {
+            "session_id": session.session_id,
+            "agent_id": session.agent_id,
+            "task": session.task,
+            "scope": session.scope,
+            "mode": session.mode,
+            "opened_at": session.opened_at,
+            "expires_at": session.expires_at,
+            "status": session.status,
+        }
+
     def close_log(self, audit_log_id: str, status: str = "completed") -> None:
         """Mark an audit log as closed."""
         log_entry = self._logs.get(audit_log_id)

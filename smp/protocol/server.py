@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Request
@@ -18,48 +17,39 @@ from smp.engine.graph_builder import DefaultGraphBuilder
 from smp.engine.query import DefaultQueryEngine
 from smp.logging import get_logger
 from smp.parser.registry import ParserRegistry
-from smp.protocol.router import handle_rpc
+from smp.protocol.dispatcher import handle_rpc
 from smp.store.graph.neo4j_store import Neo4jGraphStore
-from smp.store.interfaces import VectorStore
-from smp.store.vector.chroma_store import ChromaVectorStore
-from smp.store.vector.noop_store import NoOpVectorStore
 
 log = get_logger(__name__)
 
 
 def create_app(
-    neo4j_uri: str = "bolt://localhost:7687",
-    neo4j_user: str = "neo4j",
-    neo4j_password: str = "123456789$Do",
-    persist_dir: str | None = None,
+    neo4j_uri: str | None = None,
+    neo4j_user: str | None = None,
+    neo4j_password: str | None = None,
     safety_enabled: bool = False,
 ) -> FastAPI:
     """Create and configure the SMP FastAPI application."""
 
-    if persist_dir is None:
-        persist_dir = str(Path.home() / ".smp" / "chroma")
+    uri = neo4j_uri or os.environ.get("SMP_NEO4J_URI", "bolt://localhost:7687")
+    user = neo4j_user or os.environ.get("SMP_NEO4J_USER", "neo4j")
+    password = neo4j_password or os.environ.get("SMP_NEO4J_PASSWORD", "")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]  # noqa: ANN202
-        graph = Neo4jGraphStore(uri=neo4j_uri, user=neo4j_user, password=neo4j_password)
+        graph = Neo4jGraphStore(uri=uri, user=user, password=password)
         await graph.connect()
 
-        enrichment_mode = os.environ.get("SMP_ENRICHMENT", "full").lower()
-        if enrichment_mode == "none":
-            vector: VectorStore = NoOpVectorStore()
-            log.info("using_noop_vector_store")
-        else:
-            vector = ChromaVectorStore(persist_directory=persist_dir)
-
-        await vector.connect()
-
+        # V2: Uses Neo4j full-text index, no vector store
         enricher = StaticSemanticEnricher()
-        engine = DefaultQueryEngine(graph, vector, enricher)
+        engine = DefaultQueryEngine(graph, None, enricher)
         builder = DefaultGraphBuilder(graph)
         registry = ParserRegistry()
 
         safety: dict[str, Any] | None = None
         if safety_enabled:
+            from smp.engine.handoff import HandoffManager
+            from smp.engine.integrity import IntegrityVerifier
             from smp.engine.safety import (
                 AuditLogger,
                 CheckpointManager,
@@ -68,11 +58,9 @@ def create_app(
                 LockManager,
                 SessionManager,
             )
+            from smp.engine.telemetry import TelemetryEngine
             from smp.sandbox.executor import SandboxExecutor
             from smp.sandbox.spawner import SandboxSpawner
-            from smp.engine.telemetry import TelemetryEngine
-            from smp.engine.handoff import HandoffManager
-            from smp.engine.integrity import IntegrityVerifier
 
             session_manager = SessionManager(graph_store=graph)
             lock_manager = LockManager(graph_store=graph)
@@ -102,7 +90,6 @@ def create_app(
             }
 
         app.state.graph = graph
-        app.state.vector = vector
         app.state.engine = engine
         app.state.builder = builder
         app.state.enricher = enricher
@@ -113,7 +100,6 @@ def create_app(
         yield
 
         await graph.close()
-        await vector.close()
         log.info("server_stopped")
 
     app = FastAPI(title="SMP — Structural Memory Protocol", version="3.0.0", lifespan=lifespan)

@@ -6,6 +6,7 @@ Updated for SMP(3) partitioned schema (structural + semantic).
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
@@ -150,14 +151,14 @@ class Neo4jGraphStore(GraphStore):
 
     def __init__(
         self,
-        uri: str = "bolt://localhost:7687",
-        user: str = "neo4j",
-        password: str = "123456789$Do",
+        uri: str = "",
+        user: str = "",
+        password: str = "",
         database: str = "neo4j",
     ) -> None:
-        self._uri = uri
-        self._user = user
-        self._password = password
+        self._uri = uri or os.environ.get("SMP_NEO4J_URI", "bolt://localhost:7687")
+        self._user = user or os.environ.get("SMP_NEO4J_USER", "neo4j")
+        self._password = password or os.environ.get("SMP_NEO4J_PASSWORD", "")
         self._database = database
         self._driver: AsyncDriver | None = None
 
@@ -166,6 +167,12 @@ class Neo4jGraphStore(GraphStore):
         await self._driver.verify_connectivity()
         log.info("neo4j_connected", uri=self._uri)
         await self._execute(f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:{_ALL_LABEL}) REQUIRE n.id IS UNIQUE")
+
+        # Create full-text index for search
+        await self._execute(
+            f"CREATE FULLTEXT INDEX node_search_index IF NOT EXISTS FOR (n:{_ALL_LABEL}) "
+            "ON EACH [n.semantic_docstring, n.semantic_description, n.structural_name, n.file_path]"
+        )
 
     async def close(self) -> None:
         if self._driver:
@@ -487,84 +494,57 @@ class Neo4jGraphStore(GraphStore):
         scope: str | None = None,
         top_k: int = 5,
     ) -> list[dict[str, Any]]:
-        """Keyword search across docstrings, descriptions, and tags."""
+        """Keyword search using Neo4j full-text index (BM25)."""
+        search_query = " OR ".join(query_terms) if match == "any" else " AND ".join(query_terms)
+
+        # If search_query is empty, return empty list
+        if not search_query:
+            return []
+
         conditions: list[str] = []
-        params: dict[str, Any] = {}
+        params: dict[str, Any] = {"search_query": search_query, "limit": top_k}
 
         if scope and scope != "full":
             if scope.startswith("package:"):
                 prefix = scope[len("package:") :]
-                conditions.append("n.file_path STARTS WITH $scope_prefix")
+                conditions.append("node.file_path STARTS WITH $scope_prefix")
                 params["scope_prefix"] = prefix
             elif scope.startswith("file:"):
                 fp = scope[len("file:") :]
-                conditions.append("n.file_path = $scope_file")
+                conditions.append("node.file_path = $scope_file")
                 params["scope_file"] = fp
 
         if node_types:
             placeholders = ", ".join(f"$nt{i}" for i in range(len(node_types)))
-            conditions.append(f"n.type IN [{placeholders}]")
+            conditions.append(f"node.type IN [{placeholders}]")
             for i, nt in enumerate(node_types):
                 params[f"nt{i}"] = nt
 
-        if query_terms:
-            if match == "all":
-                for i, term in enumerate(query_terms):
-                    conditions.append(
-                        f"(n.semantic_docstring CONTAINS $q{i}"
-                        f" OR n.semantic_description CONTAINS $q{i}"
-                        f" OR n.semantic_tags CONTAINS $q{i})"
-                    )
-                    params[f"q{i}"] = term
-            else:
-                or_parts: list[str] = []
-                for i, term in enumerate(query_terms):
-                    or_parts.append(
-                        f"(n.semantic_docstring CONTAINS $q{i}"
-                        f" OR n.semantic_description CONTAINS $q{i}"
-                        f" OR n.semantic_tags CONTAINS $q{i})"
-                    )
-                    params[f"q{i}"] = term
-                if or_parts:
-                    conditions.append(f"({' OR '.join(or_parts)})")
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
-        where = " AND ".join(conditions)
-        where_clause = f"WHERE {where}" if where else ""
         cypher = f"""
-        MATCH (n:{_ALL_LABEL}) {where_clause}
-        RETURN n
+        CALL db.index.fulltext.queryNodes('node_search_index', $search_query) 
+        YIELD node, score
+        {where_clause}
+        RETURN node, score
         LIMIT $limit
         """
-        params["limit"] = top_k
+
         records = await self._execute(cypher, params)
 
         results: list[dict[str, Any]] = []
         for rec in records:
-            node = _record_to_node(dict(rec["n"]))
-            matched_on: list[str] = []
-            for term in query_terms:
-                term_lower = term.lower()
-                if term_lower in node.semantic.docstring.lower() and "docstring" not in matched_on:
-                    matched_on.append("docstring")
-                if (
-                    node.semantic.description
-                    and term_lower in node.semantic.description.lower()
-                    and "description" not in matched_on
-                ):
-                    matched_on.append("description")
-                for tag in node.semantic.tags:
-                    if term_lower in tag.lower():
-                        if "tags" not in matched_on:
-                            matched_on.append("tags")
-                        break
+            node_data = dict(rec["node"])
+            node = _record_to_node(node_data)
             results.append(
                 {
                     "node_id": node.id,
                     "node_type": node.type.value,
                     "file": node.file_path,
+                    "name": node.structural.name,
                     "docstring": node.semantic.docstring,
                     "tags": node.semantic.tags,
-                    "matched_on": matched_on,
+                    "score": rec["score"],
                 }
             )
         return results

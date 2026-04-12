@@ -1,25 +1,17 @@
 from __future__ import annotations
 
+import argparse
+import asyncio
+import os
 import sys
-
-try:
-    import pysqlite3
-
-    sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
-except ImportError:
-    pass
-
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv(Path(__file__).parent / ".env")
-
-import argparse
-import asyncio
-import time
-
 from smp.logging import configure_logging, get_logger
+
+load_dotenv(Path(__file__).parent / ".env")
 
 log = get_logger(__name__)
 
@@ -30,9 +22,9 @@ DEFAULT_MAX_FILE_SIZE = 1_000_000
 async def ingest_directory(
     directory: str,
     *,
-    neo4j_uri: str = "bolt://localhost:7687",
-    neo4j_user: str = "neo4j",
-    neo4j_password: str = "123456789$Do",
+    neo4j_uri: str | None = None,
+    neo4j_user: str | None = None,
+    neo4j_password: str | None = None,
     extensions: tuple[str, ...] = DEFAULT_EXTENSIONS,
     max_file_size: int = DEFAULT_MAX_FILE_SIZE,
     clear: bool = False,
@@ -44,7 +36,11 @@ async def ingest_directory(
     from smp.store.graph.neo4j_store import Neo4jGraphStore
 
     registry = ParserRegistry()
-    graph_store = Neo4jGraphStore(uri=neo4j_uri, user=neo4j_user, password=neo4j_password)
+    graph_store = Neo4jGraphStore(
+        uri=neo4j_uri or os.environ.get("SMP_NEO4J_URI", "bolt://localhost:7687"),
+        user=neo4j_user or os.environ.get("SMP_NEO4J_USER", "neo4j"),
+        password=neo4j_password or os.environ.get("SMP_NEO4J_PASSWORD", ""),
+    )
     builder = DefaultGraphBuilder(graph_store)
     enricher = StaticSemanticEnricher()
 
@@ -148,9 +144,13 @@ def main() -> None:
 
     ingest_cmd = sub.add_parser("ingest", help="Parse a directory and build the graph")
     ingest_cmd.add_argument("directory", help="Root directory to ingest")
-    ingest_cmd.add_argument("--neo4j-uri", default="bolt://localhost:7687")
-    ingest_cmd.add_argument("--neo4j-user", default="neo4j")
-    ingest_cmd.add_argument("--neo4j-password", default="123456789$Do")
+    ingest_cmd.add_argument(
+        "--neo4j-uri", type=str, help="Neo4j URI (defaults to SMP_NEO4J_URI env var or bolt://localhost:7687)"
+    )
+    ingest_cmd.add_argument("--neo4j-user", type=str, help="Neo4j user (defaults to SMP_NEO4J_USER env var or neo4j)")
+    ingest_cmd.add_argument(
+        "--neo4j-password", type=str, help="Neo4j password (defaults to SMP_NEO4J_PASSWORD env var)"
+    )
     ingest_cmd.add_argument("--clear", action="store_true", help="Clear graph before ingesting")
     ingest_cmd.add_argument("--json-log", action="store_true", help="JSON structured logging")
     ingest_cmd.add_argument("--max-size", type=int, default=DEFAULT_MAX_FILE_SIZE, help="Max file size in bytes")
@@ -158,9 +158,11 @@ def main() -> None:
     serve_cmd = sub.add_parser("serve", help="Start the SMP JSON-RPC server")
     serve_cmd.add_argument("--host", default="0.0.0.0", help="Bind host")
     serve_cmd.add_argument("--port", type=int, default=8420, help="Bind port")
-    serve_cmd.add_argument("--neo4j-uri", default="bolt://localhost:7687")
-    serve_cmd.add_argument("--neo4j-user", default="neo4j")
-    serve_cmd.add_argument("--neo4j-password", default="123456789$Do")
+    serve_cmd.add_argument(
+        "--neo4j-uri", type=str, help="Neo4j URI (defaults to SMP_NEO4J_URI env var or bolt://localhost:7687)"
+    )
+    serve_cmd.add_argument("--neo4j-user", type=str, help="Neo4j user (defaults to SMP_NEO4J_USER env var or neo4j)")
+    serve_cmd.add_argument("--neo4j-password", type=str, help="Neo4j password (defaults to SMP_NEO4J_PASSWORD env var)")
     serve_cmd.add_argument("--safety", action="store_true", help="Enable agent safety protocol")
     serve_cmd.add_argument("--json-log", action="store_true", help="JSON structured logging")
 
@@ -209,9 +211,13 @@ def main() -> None:
 
         import uvicorn
 
-        os.environ["SMP_NEO4J_URI"] = args.neo4j_uri
-        os.environ["SMP_NEO4J_USER"] = args.neo4j_user
-        os.environ["SMP_NEO4J_PASSWORD"] = args.neo4j_password
+        # Only set env vars if explicitly provided (to allow env var fallbacks)
+        if args.neo4j_uri:
+            os.environ["SMP_NEO4J_URI"] = args.neo4j_uri
+        if args.neo4j_user:
+            os.environ["SMP_NEO4J_USER"] = args.neo4j_user
+        if args.neo4j_password:
+            os.environ["SMP_NEO4J_PASSWORD"] = args.neo4j_password
 
         from smp.protocol.server import create_app
 

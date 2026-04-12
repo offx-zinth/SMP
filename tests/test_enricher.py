@@ -13,10 +13,10 @@ from smp.core.models import (
 )
 from smp.engine.enricher import StaticSemanticEnricher, _compute_source_hash
 
-
 # ---------------------------------------------------------------------------
 # Source hash
 # ---------------------------------------------------------------------------
+
 
 class TestSourceHash:
     def test_deterministic(self) -> None:
@@ -38,6 +38,7 @@ class TestSourceHash:
 # ---------------------------------------------------------------------------
 # Enricher (static mode, no API key)
 # ---------------------------------------------------------------------------
+
 
 class TestStaticSemanticEnricher:
     @pytest.fixture()
@@ -120,8 +121,7 @@ class TestStaticSemanticEnricher:
     @pytest.mark.asyncio
     async def test_enrich_batch(self, enricher: StaticSemanticEnricher) -> None:
         nodes = [
-            self._make_node(id=f"test::Function::f{i}::{i}", name=f"f{i}", docstring=f"Doc {i}.")
-            for i in range(5)
+            self._make_node(id=f"test::Function::f{i}::{i}", name=f"f{i}", docstring=f"Doc {i}.") for i in range(5)
         ]
         enriched = await enricher.enrich_batch(nodes)
         assert len(enriched) == 5

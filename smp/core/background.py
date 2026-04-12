@@ -84,20 +84,18 @@ class BackgroundRunner:
         if env:
             full_env.update(env)
 
-        stdout_file = open(run_dir / "stdout.log", "wb")
-        stderr_file = open(run_dir / "stderr.log", "wb")
+        with open(run_dir / "stdout.log", "wb") as stdout_file, open(run_dir / "stderr.log", "wb") as stderr_file:
+            proc = subprocess.Popen(
+                command,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                cwd=cwd or run_dir,
+                env=full_env,
+                start_new_session=True,
+                text=True,
+            )
 
-        proc = subprocess.Popen(
-            command,
-            stdout=stdout_file,
-            stderr=stderr_file,
-            cwd=cwd or run_dir,
-            env=full_env,
-            start_new_session=True,
-            text=True,
-        )
-
-        self._open_files[name] = (stdout_file, stderr_file)
+            self._open_files[name] = (None, None)  # Files closed after Popen
 
         bg_proc = BackgroundProcess(
             name=name,
@@ -119,10 +117,7 @@ class BackgroundRunner:
         with contextlib.suppress(ProcessLookupError):
             os.kill(bg_proc.pid, signal.SIGTERM)
 
-        if name in self._open_files:
-            stdout_f, stderr_f = self._open_files.pop(name)
-            stdout_f.close()
-            stderr_f.close()
+        self._open_files.pop(name, None)
 
         del self._processes[name]
         self._save()

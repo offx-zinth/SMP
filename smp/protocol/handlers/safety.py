@@ -15,6 +15,7 @@ from smp.core.models import (
     RollbackParams,
     SessionCloseParams,
     SessionOpenParams,
+    SessionRecoverParams,
 )
 from smp.logging import get_logger
 from smp.protocol.handlers.base import MethodHandler
@@ -68,6 +69,34 @@ class SessionCloseHandler(MethodHandler):
             safety["audit_logger"].close_log(close_result.get("audit_log_id", ""), scp.status)
 
         return close_result
+
+
+class SessionRecoverHandler(MethodHandler):
+    """Handles smp/session/recover method."""
+
+    @property
+    def method(self) -> str:
+        return "smp/session/recover"
+
+    async def handle(
+        self,
+        params: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        srp = msgspec.convert(params, SessionRecoverParams)
+        safety = context.get("safety")
+        if not safety:
+            raise ValueError("Safety protocol not enabled")
+
+        session_manager = safety.get("session_manager")
+        if not session_manager:
+            raise ValueError("Session manager not configured")
+
+        result = await session_manager.recover_session(srp.session_id)
+        if not result:
+            raise ValueError(f"Session not found: {srp.session_id}")
+
+        return result
 
 
 class GuardCheckHandler(MethodHandler):
@@ -222,6 +251,6 @@ class AuditGetHandler(MethodHandler):
             audit = audit_logger.get_log_by_session(params.get("session_id"))
 
         if not audit:
-            raise ValueError(f"Audit log not found: {agp.audit_log_id or params.get('session_id')}" )
+            raise ValueError(f"Audit log not found: {agp.audit_log_id or params.get('session_id')}")
 
         return audit

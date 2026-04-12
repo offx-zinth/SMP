@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any
 
 import msgspec
@@ -29,15 +30,11 @@ class SandboxSpawnHandler(MethodHandler):
         # In a real implementation, these would come from context/session
         # For now, we'll use defaults and extract from params if provided
         sp = msgspec.convert(params, dict)  # Use raw params since no model exists yet
-        
+
         spawner = SandboxSpawner()
-        
-        sandbox_info = spawner.spawn(
-            name=sp.get("name"),
-            template=sp.get("template"),
-            files=sp.get("files")
-        )
-        
+
+        sandbox_info = spawner.spawn(name=sp.get("name"), template=sp.get("template"), files=sp.get("files"))
+
         return {
             "sandbox_id": sandbox_info.sandbox_id,
             "root_path": sandbox_info.root_path,
@@ -59,17 +56,15 @@ class SandboxExecuteHandler(MethodHandler):
         context: dict[str, Any],
     ) -> dict[str, Any]:
         sep = msgspec.convert(params, dict)  # Use raw params
-        
+
         # Create executor with default config
         executor = SandboxExecutor()
-        
+
         # Execute the command
         result = await executor.execute(
-            command=sep.get("command", []),
-            stdin=sep.get("stdin"),
-            cwd=sep.get("working_directory")
+            command=sep.get("command", []), stdin=sep.get("stdin"), cwd=sep.get("working_directory")
         )
-        
+
         return {
             "execution_id": result.execution_id,
             "exit_code": result.exit_code,
@@ -96,20 +91,20 @@ class SandboxDestroyHandler(MethodHandler):
         context: dict[str, Any],
     ) -> dict[str, Any]:
         sdp = msgspec.convert(params, dict)  # Use raw params
-        
+
         spawner = SandboxSpawner()
         sandbox_id = sdp.get("sandbox_id")
-        
+
         if not sandbox_id:
             return {"error": "sandbox_id is required"}
-        
+
         destroyed = spawner.destroy(sandbox_id)
-        
+
         if destroyed:
             return {
                 "sandbox_id": sandbox_id,
                 "status": "destroyed",
-                "destroyed_at": msgspec.time.format_time(msgspec.time.now(), "%Y-%m-%dT%H:%M:%SZ"),
+                "destroyed_at": datetime.now(UTC).isoformat(),
             }
         else:
             return {"error": f"Sandbox not found: {sandbox_id}"}

@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 from smp.core.models import EdgeType, Language, NodeType
-from smp.parser.python_parser import PythonParser
-from smp.parser.typescript_parser import TypeScriptParser
-from smp.parser.registry import ParserRegistry
 from smp.parser.base import detect_language
-
+from smp.parser.python_parser import PythonParser
+from smp.parser.registry import ParserRegistry
+from smp.parser.typescript_parser import TypeScriptParser
 
 # =========================================================================
 # Language detection
 # =========================================================================
+
 
 class TestDetectLanguage:
     def test_python(self) -> None:
@@ -36,6 +36,7 @@ class TestDetectLanguage:
 # =========================================================================
 # Python parser
 # =========================================================================
+
 
 class TestPythonParser:
     def _parse(self, src: str):
@@ -136,21 +137,14 @@ class TestPythonParser:
         assert len(doc.errors) > 0
 
     def test_nested_class(self) -> None:
-        doc = self._parse(
-            "class Outer:\n"
-            "    class Inner:\n"
-            "        def deep(self):\n"
-            "            pass\n"
-        )
+        doc = self._parse("class Outer:\n    class Inner:\n        def deep(self):\n            pass\n")
         classes = [n for n in doc.nodes if n.type == NodeType.CLASS]
         assert len(classes) == 2
         names = {c.structural.name for c in classes}
         assert names == {"Outer", "Inner"}
 
     def test_multiple_functions(self) -> None:
-        doc = self._parse(
-            "def a():\n    pass\n\ndef b():\n    pass\n\ndef c():\n    pass\n"
-        )
+        doc = self._parse("def a():\n    pass\n\ndef b():\n    pass\n\ndef c():\n    pass\n")
         funcs = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
         assert len(funcs) == 3
 
@@ -168,6 +162,7 @@ class TestPythonParser:
 # =========================================================================
 # TypeScript parser
 # =========================================================================
+
 
 class TestTypeScriptParser:
     def _parse(self, src: str, fname: str = "test.ts"):
@@ -198,6 +193,7 @@ class TestTypeScriptParser:
 # =========================================================================
 # Registry
 # =========================================================================
+
 
 class TestParserRegistry:
     def test_get_python(self) -> None:

@@ -305,10 +305,13 @@ class SessionCloseParams(msgspec.Struct):
     status: str = "completed"
 
 
-class GuardCheckParams(msgspec.Struct):
-    """Parameters for smp/guard/check."""
+class SessionRecoverParams(msgspec.Struct):
+    """Parameters for smp/session/recover."""
 
     session_id: str = ""
+
+
+class GuardCheckParams(msgspec.Struct):
     target: str = ""
     intended_change: str = ""
 
@@ -485,6 +488,18 @@ class TelemetryParams(msgspec.Struct):
     action: str = "get_stats"
     node_id: str | None = None
     threshold: int | None = None
+
+
+class TelemetryHotParams(msgspec.Struct):
+    """Parameters for smp/telemetry/hot."""
+
+    node_id: str
+
+
+class TelemetryNodeParams(msgspec.Struct):
+    """Parameters for smp/telemetry/node."""
+
+    node_id: str
 
 
 # ---------------------------------------------------------------------------

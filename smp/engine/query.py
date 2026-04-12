@@ -12,7 +12,7 @@ from typing import Any
 from smp.core.models import EdgeType, GraphNode
 from smp.engine.interfaces import QueryEngine as QueryEngineInterface
 from smp.logging import get_logger
-from smp.store.interfaces import GraphStore, VectorStore
+from smp.store.interfaces import GraphStore
 
 log = get_logger(__name__)
 
@@ -23,11 +23,9 @@ class DefaultQueryEngine(QueryEngineInterface):
     def __init__(
         self,
         graph_store: GraphStore,
-        vector_store: VectorStore | None = None,
         enricher: Any | None = None,
     ) -> None:
         self._graph = graph_store
-        self._vector = vector_store
         self._enricher = enricher
 
     def _node_to_dict(self, node: GraphNode) -> dict[str, Any]:
