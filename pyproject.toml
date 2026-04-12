@@ -15,12 +15,10 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "neo4j>=5.0",
-    "chromadb>=0.6",
     "httpx>=0.27",
     "tree-sitter>=0.24",
     "tree-sitter-python>=0.23",
     "tree-sitter-typescript>=0.23",
-    "google-genai>=1.0",
     "python-dotenv>=1.0",
     "structlog>=24.0",
 ]
@@ -40,7 +38,6 @@ packages = ["smp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-
 [tool.ruff]
 target-version = "py311"
 line-length = 120
@@ -54,6 +51,7 @@ python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
+exclude = ["tests/results"]
 
 [project.scripts]
 smp = "smp.cli:main"

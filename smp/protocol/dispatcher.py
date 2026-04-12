@@ -11,43 +11,66 @@ import msgspec
 from fastapi import Request
 from fastapi.responses import Response
 
-from smp.core.models import JsonRpcError, JsonRpcRequest, JsonRpcResponse
+from smp.core.models import (
+    JsonRpcError,
+    JsonRpcRequest,
+    JsonRpcResponse,
+)
 from smp.logging import get_logger
+from smp.protocol.handlers.annotation import (
+    AnnotateBulkHandler,
+    AnnotateHandler,
+    TagHandler,
+)
 from smp.protocol.handlers.base import MethodHandler
-from smp.protocol.handlers.annotation import AnnotateHandler, AnnotateBulkHandler, TagHandler
 from smp.protocol.handlers.enrichment import (
-    EnrichHandler,
     EnrichBatchHandler,
+    EnrichHandler,
     EnrichStaleHandler,
     EnrichStatusHandler,
 )
-from smp.protocol.handlers.memory import UpdateHandler, BatchUpdateHandler, ReindexHandler
+from smp.protocol.handlers.memory import (
+    BatchUpdateHandler,
+    ReindexHandler,
+    UpdateHandler,
+)
 from smp.protocol.handlers.query import (
-    NavigateHandler,
-    TraceHandler,
     ContextHandler,
+    FlowHandler,
     ImpactHandler,
     LocateHandler,
+    NavigateHandler,
     SearchHandler,
-    FlowHandler,
+    TraceHandler,
 )
 from smp.protocol.handlers.query_ext import (
+    ConflictHandler,
     DiffHandler,
     PlanHandler,
-    ConflictHandler,
     WhyHandler,
-    TelemetryHandler,
 )
 from smp.protocol.handlers.safety import (
-    SessionOpenHandler,
-    SessionCloseHandler,
-    GuardCheckHandler,
-    DryRunHandler,
-    CheckpointHandler,
-    RollbackHandler,
-    LockHandler,
-    UnlockHandler,
     AuditGetHandler,
+    CheckpointHandler,
+    DryRunHandler,
+    GuardCheckHandler,
+    LockHandler,
+    RollbackHandler,
+    SessionCloseHandler,
+    SessionOpenHandler,
+    SessionRecoverHandler,
+    UnlockHandler,
+)
+from smp.protocol.handlers.sandbox import (
+    SandboxDestroyHandler,
+    SandboxExecuteHandler,
+    SandboxSpawnHandler,
+)
+from smp.protocol.handlers.telemetry import (
+    TelemetryHandler,
+    TelemetryHotHandler,
+    TelemetryNodeHandler,
+    TelemetryRecordHandler,
 )
 
 log = get_logger(__name__)
@@ -87,6 +110,7 @@ class RpcDispatcher:
             TagHandler,
             SessionOpenHandler,
             SessionCloseHandler,
+            SessionRecoverHandler,
             GuardCheckHandler,
             DryRunHandler,
             CheckpointHandler,
@@ -105,6 +129,13 @@ class RpcDispatcher:
             PlanHandler,
             ConflictHandler,
             WhyHandler,
+            TelemetryHandler,
+            TelemetryHotHandler,
+            TelemetryNodeHandler,
+            TelemetryRecordHandler,
+            SandboxSpawnHandler,
+            SandboxExecuteHandler,
+            SandboxDestroyHandler,
         ]:
             handler = handler_cls()
             self._handlers[handler.method] = handler
@@ -188,6 +219,9 @@ async def handle_rpc(
     registry: Any,
     vector: Any,
     safety: dict[str, Any] | None = None,
+    telemetry_engine: Any = None,
+    handoff_manager: Any = None,
+    integrity_verifier: Any = None,
 ) -> Response:
     """Dispatch a single JSON-RPC 2.0 request."""
     dispatcher = get_dispatcher()
@@ -198,5 +232,8 @@ async def handle_rpc(
         "registry": registry,
         "vector": vector,
         "safety": safety,
+        "telemetry_engine": telemetry_engine,
+        "handoff_manager": handoff_manager,
+        "integrity_verifier": integrity_verifier,
     }
     return await dispatcher.dispatch(request, context)

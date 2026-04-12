@@ -135,6 +135,7 @@ class TestSemanticProperties:
 
     def test_with_annotations(self) -> None:
         from smp.core.models import Annotations
+
         sp = SemanticProperties(
             docstring="Test function.",
             annotations=Annotations(

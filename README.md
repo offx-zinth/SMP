@@ -2,177 +2,235 @@
 
 **High-Fidelity Codebase Intelligence for AI Agents**
 
-Structural Memory Protocol (SMP) is a sophisticated graph-based memory system designed to provide AI agents with a deep, structured understanding of complex codebases. Unlike traditional RAG (Retrieval-Augmented Generation) which often treats code as flat text, SMP models code as a multi-dimensional graph of entities, relationships, and semantic meanings.
+Structural Memory Protocol (SMP) is a graph-based memory system that provides AI agents with a deep, structured understanding of complex codebases. Unlike RAG which treats code as flat text, SMP models code as a multi-dimensional graph of entities, relationships, and semantic meanings.
 
-Built with **Python 3.11**, **FastAPI**, **Neo4j**, and **ChromaDB**, SMP enables agents to perform precise code navigation, impact analysis, and safe refactoring.
-
----
-
-## 🌟 Key Capabilities
-
-*   **Graph-Augmented Retrieval:** Navigate beyond simple keyword search by following `CALLS`, `INHERITS`, and `IMPORTS` relationships.
-*   **Semantic Localization:** Use vector embeddings to find relevant code sections based on high-level intent.
-*   **Impact Assessment:** Determine the "blast radius" of a potential change before modifying a single line of code.
-*   **Safety & Sandboxing:** Includes an optional safety layer with session management, dry-run simulations, and isolated execution environments.
-*   **Multi-Language Support:** First-class support for Python and TypeScript/JavaScript via Tree-sitter integration.
+Built with **Python 3.11**, **FastAPI**, and **Neo4j**, SMP enables agents to perform precise code navigation, impact analysis, and safe refactoring — using static analysis (no LLM required).
 
 ---
 
-## 📂 Project Architecture
+## Quickstart (Docker Compose)
 
-```text
-SMP/
-├── smp/                        # Root Source Directory
-│   ├── core/                   # Foundation & Shared Services
-│   │   ├── models.py           # msgspec-based data structures (GraphNode, Edge, etc.)
-│   │   ├── background.py       # Management for long-running background tasks
-│   │   └── logging.py          # Structured JSON logging configuration
-│   ├── engine/                 # Intelligence & Processing Layer
-│   │   ├── graph_builder.py    # Logic for transforming ASTs into graph nodes
-│   │   ├── query.py            # Orchestrator for graph and vector searches
-│   │   ├── enricher.py         # Semantic enrichment via LLMs (Gemini integration)
-│   │   └── safety.py           # Guardrails: Lock management and session tracking
-│   ├── protocol/               # Communication Layer (JSON-RPC 2.0)
-│   │   ├── server.py           # FastAPI application factory
-│   │   ├── dispatcher.py       # RPC method routing logic
-│   │   └── handlers/           # Modular implementations of API methods (Trace, Impact, Flow)
-│   ├── store/                  # Persistence Layer
-│   │   ├── graph/              # Neo4j implementation and Cypher query builders
-│   │   └── vector/             # ChromaDB and No-Op vector store implementations
-│   ├── parser/                 # Syntax Analysis
-│   │   └── base.py             # Tree-sitter integration for Python and TypeScript
-│   ├── sandbox/                # Execution Safety
-│   │   └── executor.py         # Isolated process management for dry-runs
-│   ├── cli.py                  # Unified CLI for ingestion, serving, and process control
-│   └── client.py               # Async Python SDK for agent integration
-├── tests/                      # Rigorous testing suite mirroring source structure
-└── AGENTS.md                   # Specialized prompt injection for SMP-aware agents
-```
+The fastest way to get SMP running:
 
----
-
-## 🚀 Installation & Setup
-
-### 1. Requirements
-- **Python 3.11+** (Strictly required for union types and modern async features)
-- **Neo4j 5.x** (Local instance or AuraDB)
-- **ChromaDB** (Managed automatically, but requires modern SQLite)
-
-### 2. Environment Configuration
-Create a `.env` file in the root directory:
 ```bash
-# Core API Keys
-GEMINI_API_KEY="your-google-api-key"
-
-# Database Configuration
-SMP_NEO4J_URI="bolt://localhost:7687"
-SMP_NEO4J_USER="neo4j"
-SMP_NEO4J_PASSWORD="your-secure-password"
-
-# Operational Modes
-SMP_ENRICHMENT="full"  # Set to "none" to disable LLM enrichment
-```
-
-### 3. Installation Steps
-```bash
-# Clone and enter the repo
+# Clone the repository
 git clone https://github.com/your-org/smp.git
 cd smp
 
-# Create venv with Python 3.11
-python3.11 -m venv .venv
-source .venv/bin/activate
+# Copy and configure environment
+cp .env.example .env
+# Edit .env with your Neo4j password
 
-# Install with development dependencies
-pip install -e ".[dev]"
+# Start all services
+docker compose up -d
+
+# Verify health
+curl http://localhost:8420/health
+# Returns: {"status":"ok"}
 ```
 
 ---
 
-## 🛠 Usage Guide
+## Quickstart (Manual)
 
-### Ingesting a Project
-Before an agent can use SMP, the codebase must be indexed:
+### 1. Requirements
+- **Python 3.11+**
+- **Neo4j 5.x** (Local or AuraDB)
+
+### 2. Environment
 ```bash
-smp ingest /path/to/target/project --clear
+# Copy the example and configure
+cp .env.example .env
+
+# Edit .env with your credentials:
+#   SMP_NEO4J_PASSWORD=your_neo4j_password
 ```
 
-### Running the API Server
-Start the JSON-RPC server to allow agent access:
+### 3. Install & Run
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+
+# Start the server
+smp serve
+```
+
+---
+
+## Architecture: Manual Efficient Method (SMP V2)
+
+SMP V2 is designed for production-grade efficiency. It relies on **static AST extraction** and **Neo4j full-text indexing** — no LLM or vector embeddings required.
+
+- **Parser**: Tree-sitter extracts functions, classes, imports, and docstrings directly from AST.
+- **Enricher**: Extracts docstrings, decorators, and type annotations statically.
+- **Linker**: Namespaced cross-file resolution for CALLS edges.
+- **Query Engine**: Neo4j full-text index (BM25) for keyword search.
+- **Safety Protocol**: Session management, dry-runs, and isolated sandbox execution.
+
+---
+
+## Demo: JSON-RPC Query
+
+Ingest a codebase and query it:
+
+```bash
+# Ingest a project
+smp ingest /path/to/your/project
+
+# Query via JSON-RPC
+curl -X POST http://localhost:8420/rpc \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "smp/context",
+    "params": {
+      "file_path": "smp/core/models.py",
+      "scope": "edit",
+      "depth": 2
+    },
+    "id": 1
+  }'
+```
+
+**Response:**
+```json
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "self": {
+      "id": "smp/core/models.py::GraphNode",
+      "type": "Class",
+      "name": "GraphNode",
+      "signature": "class GraphNode",
+      "start_line": 130,
+      "end_line": 220
+    },
+    "neighbors": [
+      {
+        "id": "smp/core/models.py::StructuralProperties",
+        "type": "Class",
+        "relationship": "CONTAINS"
+      },
+      {
+        "id": "smp/core/models.py::SemanticProperties",
+        "type": "Class", 
+        "relationship": "CONTAINS"
+      }
+    ],
+    "context": {
+      "file": "smp/core/models.py",
+      "imports": ["msgspec", "typing"],
+      "defines": ["GraphNode", "GraphEdge", "NodeType", "EdgeType"]
+    }
+  },
+  "id": 1
+}
+```
+
+---
+
+## Key Capabilities
+
+* **Graph-Augmented Retrieval:** Navigate via `CALLS`, `INHERITS`, `IMPORTS` relationships
+* **Semantic Search:** Neo4j full-text index (BM25) for keyword search across docstrings/tags
+* **Static Enrichment:** Docstrings, decorators, and type annotations extracted from AST
+* **Impact Assessment:** Determine the "blast radius" before changes
+* **Safety & Sandboxing:** Session management, dry-runs, isolated execution
+* **Multi-Language:** Python and TypeScript/JavaScript via Tree-sitter
+
+---
+
+## Architecture
+
+```
+smp/
+├── smp/
+│   ├── core/            # Models, logging
+│   ├── engine/         # Query, enricher, linker, safety
+│   ├── protocol/      # JSON-RPC 2.0 API
+│   │   └── handlers/  # Modular method handlers
+│   ├── store/         # Neo4j (graph + full-text)
+│   ├── parser/        # Tree-sitter parsing
+│   ├── sandbox/        # Isolated execution
+│   ├── cli.py         # CLI
+│   └── client.py      # Python SDK
+├── tests/             # Test suite
+└── .github/workflows/# CI/CD
+```
+
+---
+
+## Usage
+
+### Ingest a Project
+```bash
+smp ingest /path/to/project --clear
+```
+
+### Run Server
 ```bash
 smp serve --port 8420 --safety
 ```
 
-### Background Task Management
-SMP includes a built-in runner for long-running background processes:
-```bash
-# Start a service in the background
-smp run my-server -- .venv/bin/python -m smp.cli serve
-
-# Monitor processes
-smp ps
-smp logs my-server
-```
-
-### Integration Example (Python SDK)
+### Python SDK
 ```python
 import asyncio
 from smp.client import SMPClient
 
-async def analyze_codebase():
+async def main():
     async with SMPClient("http://localhost:8420") as client:
-        # 1. Semantic Search
-        findings = await client.locate("Where is the user authentication handled?")
+        # Semantic search
+        results = await client.locate("authentication logic")
         
-        # 2. Trace Call Graph
-        # Get the full execution flow starting from a specific function
-        call_graph = await client.trace("smp/protocol/server.py::create_app", depth=5)
+        # Trace call graph
+        graph = await client.trace("src/auth.py::login", depth=5)
         
-        # 3. Predict Impact
-        # What happens if we change this class?
-        impact = await client.assess_impact("smp/core/models.py::GraphNode")
-        print(f"Blast radius: {impact['total_affected_nodes']} nodes")
+        # Impact assessment
+        impact = await client.assess_impact("src/models/user.py::User")
+        print(f"Affects {impact['total_affected_nodes']} nodes")
 
-if __name__ == "__main__":
-    asyncio.run(analyze_codebase())
+asyncio.run(main())
 ```
 
 ---
 
-## 🧪 Development & Quality Control
-
-We enforce strict typing and linting standards. All PRs must pass the following:
+## Development
 
 ```bash
-# Run the test suite
-pytest
+# Format
+ruff format .
 
-# Check for type errors (Strict Mode)
+# Lint
+ruff check .
+
+# Type check
 mypy smp/
 
-# Lint and Auto-format
-ruff check . --fix
-ruff format .
+# Test
+pytest
 ```
 
 ---
 
-## 🛠 Troubleshooting
+## Troubleshooting
 
-| Problem | Likely Cause | Solution |
-|:---|:---|:---|
-| `ImportError: cannot import name 'sqlite3'` | Outdated system SQLite | In Linux, ensure `pysqlite3-binary` is installed; SMP will automatically swap the module. |
-| `Neo4j Connection Error` | Bolt port mismatch | Ensure Neo4j is listening on `7687` and your credentials match the `.env`. |
-| `SyntaxError` in source | Wrong Python Version | Ensure you are using `python3.11`. Check with `python3 --version`. |
-| `Enrichment Timeout` | LLM Rate Limiting | Set `SMP_ENRICHMENT=none` to skip LLM-based semantic analysis during ingestion. |
+| Issue | Solution |
+|:---|:---|
+| `sqlite3` ImportError | Install `pysqlite3-binary` |
+| Neo4j Connection | Check `SMP_NEO4J_URI` and credentials in `.env` |
+| SyntaxError | Use Python 3.11 |
+| Enrichment Timeout | Set `SMP_ENRICHMENT=none` in `.env` |
+
+---
+
+## Contributing
+
+1. Use `feature/` or `fix/` branches
+2. Follow patterns in `AGENTS.md`
+3. Add tests for new features
+4. Run `ruff check . && ruff format . && mypy smp/ && pytest`
 
 ---
 
-## 📜 Contributing
-1.  **Branching:** Use `feature/` or `fix/` prefixes.
-2.  **Style:** Follow the patterns in `AGENTS.md`. Use absolute imports and `msgspec` for all new models.
-3.  **Tests:** Add a corresponding test in `tests/` for every new feature.
-4.  **Logging:** Use structured logging with `get_logger(__name__)`. Never use f-strings in logs.
-
----
 *SMP — Empowering agents with structural memory.*

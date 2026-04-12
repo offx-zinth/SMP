@@ -1,18 +1,17 @@
-"""Tests for Neo4j graph store and ChromaDB vector store — SMP(3)."""
+"""Tests for Neo4j graph store — SMP(3)."""
 
 from __future__ import annotations
 
 import pytest
 
-from smp.core.models import EdgeType, GraphEdge, NodeType, SemanticProperties, StructuralProperties
+from smp.core.models import EdgeType, NodeType, StructuralProperties
 from smp.store.graph.neo4j_store import Neo4jGraphStore
-from smp.store.vector.chroma_store import ChromaVectorStore
 from tests.conftest import make_edge, make_node
-
 
 # ===================================================================
 # Neo4j Graph Store Tests
 # ===================================================================
+
 
 class TestNeo4jNodeCRUD:
     @pytest.mark.asyncio
@@ -105,7 +104,7 @@ class TestNeo4jEdgeCRUD:
     async def test_upsert_edges_batch(self, clean_graph: Neo4jGraphStore) -> None:
         nodes = [make_node(id=f"n{i}") for i in range(5)]
         await clean_graph.upsert_nodes(nodes)
-        edges = [make_edge(source=f"n{i}", target=f"n{i+1}") for i in range(4)]
+        edges = [make_edge(source=f"n{i}", target=f"n{i + 1}") for i in range(4)]
         await clean_graph.upsert_edges(edges)
         total = await clean_graph.count_edges()
         assert total == 4
@@ -146,7 +145,7 @@ class TestNeo4jTraversal:
     async def test_traverse(self, clean_graph: Neo4jGraphStore) -> None:
         nodes = [make_node(id=f"n{i}") for i in range(5)]
         await clean_graph.upsert_nodes(nodes)
-        edges = [make_edge(source=f"n{i}", target=f"n{i+1}") for i in range(4)]
+        edges = [make_edge(source=f"n{i}", target=f"n{i + 1}") for i in range(4)]
         await clean_graph.upsert_edges(edges)
         result = await clean_graph.traverse("n0", EdgeType.CALLS, depth=3)
         ids = {n.id for n in result}
@@ -157,29 +156,45 @@ class TestNeo4jTraversal:
 class TestNeo4jSearch:
     @pytest.mark.asyncio
     async def test_find_by_type(self, clean_graph: Neo4jGraphStore) -> None:
-        await clean_graph.upsert_nodes([
-            make_node(id="f1", type=NodeType.FUNCTION),
-            make_node(id="c1", type=NodeType.CLASS),
-        ])
+        await clean_graph.upsert_nodes(
+            [
+                make_node(id="f1", type=NodeType.FUNCTION),
+                make_node(id="c1", type=NodeType.CLASS),
+            ]
+        )
         funcs = await clean_graph.find_nodes(type=NodeType.FUNCTION)
         assert len(funcs) == 1
         assert funcs[0].id == "f1"
 
     @pytest.mark.asyncio
     async def test_find_by_file(self, clean_graph: Neo4jGraphStore) -> None:
-        await clean_graph.upsert_nodes([
-            make_node(id="a", file_path="x.py"),
-            make_node(id="b", file_path="y.py"),
-        ])
+        await clean_graph.upsert_nodes(
+            [
+                make_node(id="a", file_path="x.py"),
+                make_node(id="b", file_path="y.py"),
+            ]
+        )
         result = await clean_graph.find_nodes(file_path="x.py")
         assert len(result) == 1
 
     @pytest.mark.asyncio
     async def test_find_by_name(self, clean_graph: Neo4jGraphStore) -> None:
-        await clean_graph.upsert_nodes([
-            make_node(id="a", structural=StructuralProperties(name="login", file="test.py", signature="", start_line=1, end_line=5, lines=5)),
-            make_node(id="b", structural=StructuralProperties(name="logout", file="test.py", signature="", start_line=1, end_line=5, lines=5)),
-        ])
+        await clean_graph.upsert_nodes(
+            [
+                make_node(
+                    id="a",
+                    structural=StructuralProperties(
+                        name="login", file="test.py", signature="", start_line=1, end_line=5, lines=5
+                    ),
+                ),
+                make_node(
+                    id="b",
+                    structural=StructuralProperties(
+                        name="logout", file="test.py", signature="", start_line=1, end_line=5, lines=5
+                    ),
+                ),
+            ]
+        )
         result = await clean_graph.find_nodes(name="login")
         assert len(result) == 1
 
@@ -196,97 +211,3 @@ class TestNeo4jCounts:
         await clean_graph.upsert_edge(make_edge(source="a", target="b"))
         assert await clean_graph.count_nodes() == 2
         assert await clean_graph.count_edges() == 1
-
-
-# ===================================================================
-# ChromaDB Vector Store Tests
-# ===================================================================
-
-class TestChromaVectorStore:
-    @pytest.mark.asyncio
-    async def test_upsert_and_query(self, vector_store: ChromaVectorStore) -> None:
-        emb = [1.0, 0.0, 0.0]
-        await vector_store.upsert(
-            ids=["n1"],
-            embeddings=[emb],
-            metadatas=[{"name": "login", "file_path": "auth.py"}],
-            documents=["def login(): ..."],
-        )
-        results = await vector_store.query(emb, top_k=1)
-        assert len(results) == 1
-        assert results[0]["id"] == "n1"
-        assert results[0]["score"] > 0.99
-
-    @pytest.mark.asyncio
-    async def test_query_with_filter(self, vector_store: ChromaVectorStore) -> None:
-        await vector_store.upsert(
-            ids=["n1", "n2"],
-            embeddings=[[1.0, 0.0], [0.0, 1.0]],
-            metadatas=[{"file_path": "a.py"}, {"file_path": "b.py"}],
-        )
-        results = await vector_store.query([1.0, 0.0], top_k=5, where={"file_path": "a.py"})
-        assert len(results) == 1
-        assert results[0]["id"] == "n1"
-
-    @pytest.mark.asyncio
-    async def test_get_existing(self, vector_store: ChromaVectorStore) -> None:
-        await vector_store.upsert(
-            ids=["n1"],
-            embeddings=[[1.0, 0.0]],
-            metadatas=[{"name": "test"}],
-            documents=["test doc"],
-        )
-        results = await vector_store.get(["n1", "n2"])
-        assert results[0] is not None
-        assert results[0]["id"] == "n1"
-        assert results[1] is None
-
-    @pytest.mark.asyncio
-    async def test_delete(self, vector_store: ChromaVectorStore) -> None:
-        await vector_store.upsert(
-            ids=["n1", "n2"],
-            embeddings=[[1.0], [2.0]],
-            metadatas=[{}, {}],
-        )
-        deleted = await vector_store.delete(["n1"])
-        assert deleted == 1
-        results = await vector_store.get(["n1"])
-        assert results[0] is None
-
-    @pytest.mark.asyncio
-    async def test_delete_by_file(self, vector_store: ChromaVectorStore) -> None:
-        await vector_store.upsert(
-            ids=["a1", "a2", "b1"],
-            embeddings=[[1.0], [2.0], [3.0]],
-            metadatas=[
-                {"file_path": "a.py"},
-                {"file_path": "a.py"},
-                {"file_path": "b.py"},
-            ],
-        )
-        deleted = await vector_store.delete_by_file("a.py")
-        assert deleted == 2
-        results = await vector_store.get(["a1", "a2", "b1"])
-        assert results[0] is None
-        assert results[1] is None
-        assert results[2] is not None
-
-    @pytest.mark.asyncio
-    async def test_upsert_is_idempotent(self, vector_store: ChromaVectorStore) -> None:
-        await vector_store.upsert(
-            ids=["n1"],
-            embeddings=[[1.0]],
-            metadatas=[{"v": "first"}],
-        )
-        await vector_store.upsert(
-            ids=["n1"],
-            embeddings=[[2.0]],
-            metadatas=[{"v": "second"}],
-        )
-        results = await vector_store.get(["n1"])
-        assert results[0] is not None
-        assert results[0]["metadata"]["v"] == "second"
-
-    @pytest.mark.asyncio
-    async def test_empty_upsert(self, vector_store: ChromaVectorStore) -> None:
-        await vector_store.upsert(ids=[], embeddings=[], metadatas=[])

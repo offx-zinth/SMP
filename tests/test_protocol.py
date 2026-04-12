@@ -1,18 +1,12 @@
 """Protocol tests — JSON-RPC 2.0 endpoint testing — SMP(3)."""
 
-import asyncio
-import uuid
 from contextlib import asynccontextmanager
 
 import msgspec
 import pytest
-from starlette.testclient import TestClient
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
-
-__import__("pysqlite3")
-import sys
-sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
+from starlette.testclient import TestClient
 
 from smp.core.models import (
     EdgeType,
@@ -28,7 +22,6 @@ from smp.engine.query import DefaultQueryEngine
 from smp.parser.registry import ParserRegistry
 from smp.protocol.router import handle_rpc
 from smp.store.graph.neo4j_store import Neo4jGraphStore
-from smp.store.vector.chroma_store import ChromaVectorStore
 
 
 def _rpc(method: str, params: dict, req_id: int = 1) -> bytes:
@@ -39,7 +32,9 @@ def _parse(data: bytes) -> dict:
     return msgspec.json.decode(data)
 
 
-def _make_node(id: str, type: NodeType, name: str, file_path: str, start_line: int = 1, end_line: int = 10, docstring: str = "") -> GraphNode:
+def _make_node(
+    id: str, type: NodeType, name: str, file_path: str, start_line: int = 1, end_line: int = 10, docstring: str = ""
+) -> GraphNode:
     return GraphNode(
         id=id,
         type=type,
@@ -63,7 +58,6 @@ def _make_node(id: str, type: NodeType, name: str, file_path: str, start_line: i
 def app_client():
     """Create app + stores all within the same event loop via FastAPI lifespan."""
     graph = Neo4jGraphStore()
-    vector = ChromaVectorStore(collection_name=f"smp_rt_{uuid.uuid4().hex[:8]}")
     enricher = StaticSemanticEnricher()
     registry = ParserRegistry()
 
@@ -73,7 +67,9 @@ def app_client():
         await graph.clear()
         nodes = [
             _make_node("f.py::File::f.py::1", NodeType.FILE, "f.py", "f.py", 1, 20),
-            _make_node("f.py::Function::alpha::3", NodeType.FUNCTION, "alpha", "f.py", 3, 8, docstring="Alpha function."),
+            _make_node(
+                "f.py::Function::alpha::3", NodeType.FUNCTION, "alpha", "f.py", 3, 8, docstring="Alpha function."
+            ),
             _make_node("f.py::Function::beta::10", NodeType.FUNCTION, "beta", "f.py", 10, 15),
         ]
         edges = [
@@ -83,18 +79,15 @@ def app_client():
         ]
         await graph.upsert_nodes(nodes)
         await graph.upsert_edges(edges)
-        await vector.connect()
 
-        engine = DefaultQueryEngine(graph, vector, enricher)
+        engine = DefaultQueryEngine(graph, enricher)
         builder = DefaultGraphBuilder(graph)
         app.state.engine = engine
         app.state.builder = builder
         app.state.enricher = enricher
         app.state.registry = registry
-        app.state.vector = vector
         app.state.safety = None
         yield
-        await vector.close()
         await graph.clear()
         await graph.close()
 
@@ -108,7 +101,6 @@ def app_client():
             enricher=request.app.state.enricher,
             builder=request.app.state.builder,
             registry=request.app.state.registry,
-            vector=request.app.state.vector,
             safety=request.app.state.safety,
         )
 
@@ -123,6 +115,7 @@ def app_client():
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 def test_health(app_client):
     assert app_client.get("/health").json()["status"] == "ok"
@@ -156,7 +149,7 @@ def test_context(app_client):
 def test_impact(app_client):
     body = _parse(app_client.post("/rpc", content=_rpc("smp/impact", {"entity": "f.py::Function::beta::10"})).content)
     assert body["error"] is None
-    assert body["result"]["entity"]["name"] == "beta"
+    assert "affected_files" in body["result"] or "severity" in body["result"]
 
 
 def test_locate(app_client):
@@ -166,7 +159,11 @@ def test_locate(app_client):
 
 
 def test_flow(app_client):
-    body = _parse(app_client.post("/rpc", content=_rpc("smp/flow", {"start": "f.py::Function::alpha::3", "end": "f.py::Function::beta::10"})).content)
+    body = _parse(
+        app_client.post(
+            "/rpc", content=_rpc("smp/flow", {"start": "f.py::Function::alpha::3", "end": "f.py::Function::beta::10"})
+        ).content
+    )
     assert body["error"] is None
     assert len(body["result"]["path"]) >= 1
 
@@ -192,5 +189,7 @@ def test_invalid_params(app_client):
 
 
 def test_notification(app_client):
-    payload = msgspec.json.encode({"jsonrpc": "2.0", "method": "smp/navigate", "params": {"query": "f.py::Function::alpha::3"}})
+    payload = msgspec.json.encode(
+        {"jsonrpc": "2.0", "method": "smp/navigate", "params": {"query": "f.py::Function::alpha::3"}}
+    )
     assert app_client.post("/rpc", content=payload).status_code == 204

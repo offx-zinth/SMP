@@ -267,7 +267,7 @@ class CodingAgent:
         log.info("agent_step_start", step=4, label="generate", workflow_id=workflow_id)
 
         if not self._llm:
-            raise AgentError("No LLM backend available. Set GEMINI_API_KEY or GOOGLE_API_KEY to enable edit generation.")
+            raise AgentError("No LLM backend. Set GEMINI_API_KEY or GOOGLE_API_KEY to enable edit generation.")
 
         system_prompt = self._build_system_prompt()
         user_prompt = self._build_user_prompt(

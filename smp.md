@@ -22,11 +22,10 @@ A framework for giving AI agents a "programmer's brain" — not text retrieval, 
 │                                             │                   │
 │                     ┌───────────────────────▼──────────────┐    │
 │                     │         MEMORY STORE                 │    │
-│                     │       ┌─────────────┐                 │    │
-│                     │       │ GRAPH DB    │                 │    │
-│                     │       │ (Structure  │                 │    │
-│                     │       │  + Tags)    │                 │    │
-│                     │       └─────────────┘                 │    │
+│                     │  ┌─────────────┐  ┌──────────────┐   │    │
+│                     │  │ GRAPH DB    │  │ VECTOR STORE │   │    │
+│                     │  │ (Structure) │  │ (Purpose)    │   │    │
+│                     │  └─────────────┘  └──────────────┘   │    │
 │                     └───────────────────────┬──────────────┘    │
 └─────────────────────────────────────────────┼──────────────────-┘
                                               │
@@ -154,240 +153,50 @@ A framework for giving AI agents a "programmer's brain" — not text retrieval, 
 
 ### C. Semantic Enricher
 
-**Purpose:** Tag every node with queryable labels derived purely from static analysis — no LLM, no embeddings, no ML of any kind. Everything here is deterministic and computable at parse time.
+**Purpose:** Add meaning to structural nodes.
 
----
+**Process:**
 
-#### What Gets Attached to Each Node
+1. **Static Analysis (No LLM needed):**
+   - Extract docstrings
+   - Parse comments
+   - Infer from naming conventions (`getUserById` → "retrieves user by identifier")
+   - Extract type information
 
-Four purely-computable fields that make graph queries expressive:
+2. **LLM Enrichment (One-time per node):**
+   ```
+   Prompt: "In 1 sentence, what is the PURPOSE of this code in the system?"
+   
+   Input:
+   - Function signature
+   - Docstring
+   - Dependencies
+   - Called-by relationships
+   
+   Output:
+   "Handles user authentication by validating credentials against the database 
+   and issuing JWT tokens for session management."
+   ```
 
-```
-intent      →  what the node is trying to do        (from name + docstring)
-category    →  what domain bucket it belongs to      (from name patterns + file path)
-tags        →  flat set of searchable labels          (from all sources below)
-role        →  structural role in the architecture   (from graph shape)
-```
+3. **Embedding Generation:**
+   - Embed the purpose + signature + key context
+   - Store in vector database for similarity search
 
-These become **filterable graph node properties** — agents query them directly, no similarity search needed.
-
----
-
-#### Source 1 — Verb Prefix → Intent
-
-Split the function name at camelCase/snake_case boundaries. The first token (verb) maps to a known intent.
-
-```python
-VERB_INTENT = {
-    "get":          "read",      "fetch":      "read",
-    "find":         "read",      "list":       "read",
-    "load":         "read",      "read":       "read",
-    "query":        "read",      "search":     "read",
-
-    "set":          "write",     "save":       "write",
-    "update":       "write",     "upsert":     "write",
-    "write":        "write",     "persist":    "write",
-    "patch":        "write",     "store":      "write",
-
-    "create":       "create",    "build":      "create",
-    "make":         "create",    "generate":   "create",
-    "new":          "create",    "init":       "create",
-    "construct":    "create",    "spawn":      "create",
-
-    "delete":       "delete",    "remove":     "delete",
-    "destroy":      "delete",    "drop":       "delete",
-    "purge":        "delete",    "clear":      "delete",
-
-    "validate":     "validate",  "check":      "validate",
-    "verify":       "validate",  "assert":     "validate",
-    "ensure":       "validate",  "is":         "validate",
-    "has":          "validate",  "can":        "validate",
-
-    "parse":        "transform", "convert":    "transform",
-    "map":          "transform", "transform":  "transform",
-    "format":       "transform", "serialize":  "transform",
-    "deserialize":  "transform", "decode":     "transform",
-
-    "send":         "io",        "emit":       "io",
-    "publish":      "io",        "notify":     "io",
-    "broadcast":    "io",        "dispatch":   "io",
-    "render":       "io",        "print":      "io",
-
-    "handle":       "handler",   "process":    "handler",
-    "execute":      "handler",   "run":        "handler",
-
-    "authenticate": "auth",      "authorize":  "auth",
-    "login":        "auth",      "logout":     "auth",
-    "permit":       "auth",      "guard":      "auth",
-}
-
-def extract_intent(name: str) -> str:
-    verb = split_tokens(name)[0].lower()   # "authenticateUser" → "authenticate"
-    return VERB_INTENT.get(verb, "unknown")
-```
-
----
-
-#### Source 2 — File Path → Category
-
-The directory tree is the richest free signal in any codebase. No inference needed — the dev already categorized the code by where they put it.
-
-```python
-PATH_CATEGORY = [
-    (r"auth|login|session|oauth|jwt|token",  "authentication"),
-    (r"user|account|profile|member",         "user_management"),
-    (r"payment|billing|invoice|stripe",      "payments"),
-    (r"email|mail|smtp|notification|push",   "notifications"),
-    (r"db|database|model|schema|migration",  "persistence"),
-    (r"api|route|endpoint|controller|handler","api_layer"),
-    (r"service|svc",                         "service_layer"),
-    (r"util|helper|lib|common|shared",       "utilities"),
-    (r"middleware|interceptor|guard|filter",  "middleware"),
-    (r"test|spec|__tests__",                 "tests"),
-    (r"config|env|settings",                 "configuration"),
-    (r"cache|redis|memcache",                "caching"),
-    (r"queue|job|worker|task|cron",          "background_jobs"),
-    (r"event|bus|pubsub|stream",             "event_system"),
-    (r"types|interfaces|models|dto",         "type_definitions"),
-]
-
-def extract_category(file_path: str) -> str:
-    for pattern, category in PATH_CATEGORY:
-        if re.search(pattern, file_path, re.IGNORECASE):
-            return category
-    return "uncategorized"
-```
-
----
-
-#### Source 3 — Graph Shape → Role
-
-A node's position and connectivity in the graph reveals its architectural role, with zero ML.
-
-```python
-def extract_role(node: GraphNode, graph: Graph) -> str:
-    in_deg  = graph.in_degree(node)   # how many things call this
-    out_deg = graph.out_degree(node)  # how many things this calls
-    is_exported = "export" in node.modifiers
-    is_tested   = graph.has_relationship(node, "TESTS", direction="incoming")
-
-    if in_deg == 0 and is_exported:
-        return "public_api"        # entry point, called from outside
-
-    if in_deg > 10:
-        return "utility"           # everyone depends on it → shared helper
-
-    if out_deg == 0:
-        return "leaf"              # calls nothing → pure computation or I/O
-
-    if out_deg > 8:
-        return "orchestrator"      # fans out to many things → coordinator
-
-    if in_deg > 5 and out_deg > 5:
-        return "hub"               # high traffic both ways → core logic
-
-    if is_tested and in_deg <= 2:
-        return "testable_unit"     # small, tested, isolated
-
-    return "internal"
-```
-
----
-
-#### Source 4 — Keyword Tags
-
-A flat, queryable tag set merged from all sources above. Agents can filter on these directly.
-
-```python
-def build_tags(node, intent, category, role, docstring) -> set[str]:
-    tags = set()
-
-    tags.add(intent)       # "read", "write", "auth", ...
-    tags.add(category)     # "authentication", "payments", ...
-    tags.add(role)         # "orchestrator", "leaf", "public_api", ...
-    tags.add(node.type)    # "function", "class", "interface", ...
-
-    # async / sync
-    if "async" in node.modifiers or "Promise" in (node.return_type or ""):
-        tags.add("async")
-    else:
-        tags.add("sync")
-
-    # exported / internal
-    tags.add("exported" if "export" in node.modifiers else "internal")
-
-    # has tests?
-    tags.add("tested" if graph.has_relationship(node, "TESTS", "incoming") else "untested")
-
-    # return type signals
-    if node.return_type in ("void", "None", "unit"):
-        tags.add("side_effect")
-    else:
-        tags.add("pure_output")
-
-    # keyword tokens from docstring (no NLP — just split + stopword filter)
-    if docstring:
-        tokens = tokenize(docstring)                     # split on whitespace/punct
-        tags |= {t for t in tokens if t not in STOPWORDS and len(t) > 3}
-
-    return tags
-```
-
----
-
-#### Final Enriched Node
+**Enriched Node:**
 
 ```json
 {
     "id": "func_authenticate_user",
-    "structural": {
-        "signature": "authenticateUser(email: string, password: string): Promise<Token>",
-        "file": "src/auth/login.ts",
-        "lines": 28,
-        "complexity": 4
-    },
+    "structural": { ... },
     "semantic": {
-        "intent":   "auth",
-        "category": "authentication",
-        "role":     "public_api",
-        "tags":     ["auth", "authentication", "public_api", "function", "async", "exported", "tested", "pure_output", "credentials", "jwt", "session"],
-        "enriched_at": "2025-02-15T10:30:00Z"
+        "purpose": "Handles user authentication by validating credentials against the database and issuing JWT tokens for session management",
+        "keywords": ["auth", "login", "jwt", "credentials", "validation"],
+        "embedding": [0.123, -0.456, ...],
+        "last_enriched": "2025-02-15T10:30:00Z",
+        "confidence": 0.92
     }
 }
 ```
-
----
-
-#### What This Enables (Pure Graph Queries)
-
-```python
-# "Show me all untested public API functions in the auth layer"
-graph.query("""
-    MATCH (f:Function)
-    WHERE f.semantic.category = 'authentication'
-      AND f.semantic.role = 'public_api'
-      AND 'untested' IN f.semantic.tags
-    RETURN f
-""")
-
-# "What are all the orchestrators in the payments module?"
-graph.query("""
-    MATCH (f:Function)
-    WHERE f.semantic.role = 'orchestrator'
-      AND f.semantic.category = 'payments'
-    RETURN f
-""")
-
-# "Find all side-effectful write operations"
-graph.query("""
-    MATCH (f:Function)
-    WHERE f.semantic.intent = 'write'
-      AND 'side_effect' IN f.semantic.tags
-    RETURN f
-""")
-```
-
-No vector search. No embeddings. No LLM. Just graph properties and filters.
 
 ---
 
@@ -817,7 +626,9 @@ def get_context(self, file_path: str, scope: str = "edit"):
 | Component | Technology | Why |
 |-----------|------------|-----|
 | **Parser** | Tree-sitter | Multi-language, incremental, fast |
-| **Graph DB** | Neo4j / Memgraph / SQLite (if lightweight) | Native graph queries, stores tags as node properties |
+| **Graph DB** | Neo4j / Memgraph / SQLite (if lightweight) | Native graph queries |
+| **Vector Store** | Chroma / Qdrant / LanceDB | Semantic search |
+| **Embedding** | OpenAI text-embedding-3-small | Good balance of speed/quality |
 | **Protocol** | JSON-RPC 2.0 | Standard, simple, MCP-compatible |
 | **Language** | Python (prototype) → Rust (production) | Start fast, optimize later |
 

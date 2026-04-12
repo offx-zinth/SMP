@@ -1,7 +1,8 @@
-"""Static semantic enricher — AST-based extraction, no LLM.
+"""Static semantic enricher — AST-based extraction.
 
 Extracts docstrings, inline comments, decorators, type annotations,
 and computes source hashes purely from the AST.
+No LLM or embedding generation.
 """
 
 from __future__ import annotations
@@ -22,26 +23,6 @@ def _compute_source_hash(name: str, file_path: str, start: int, end: int, signat
     return hashlib.sha256(raw.encode()).hexdigest()[:8]
 
 
-class LLMSemanticEnricher:
-    """Legacy LLM enricher placeholder - not yet implemented."""
-
-    def __init__(self) -> None:
-        self._static = StaticSemanticEnricher()
-
-    @property
-    def has_llm(self) -> bool:
-        return False
-
-    async def enrich_node(self, node: GraphNode, force: bool = False) -> GraphNode:
-        return await self._static.enrich_node(node, force=force)
-
-    async def enrich_batch(self, nodes: list[GraphNode], force: bool = False) -> list[GraphNode]:
-        return await self._static.enrich_batch(nodes, force=force)
-
-    async def embed(self, text: str) -> list[float]:
-        return []
-
-
 class StaticSemanticEnricher(SemanticEnricherInterface):
     """Static AST-based semantic enricher. No LLM, no embeddings."""
 
@@ -52,10 +33,6 @@ class StaticSemanticEnricher(SemanticEnricherInterface):
             "no_metadata": 0,
             "failed": 0,
         }
-
-    @property
-    def has_llm(self) -> bool:
-        return False
 
     async def enrich_node(
         self,

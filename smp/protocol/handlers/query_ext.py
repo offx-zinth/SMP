@@ -50,9 +50,7 @@ class PlanHandler(MethodHandler):
     ) -> dict[str, Any]:
         pp = msgspec.convert(params, PlanParams)
         engine = context["engine"]
-        return await engine.plan(
-            pp.change_description, pp.target_file, pp.change_type, pp.scope
-        )
+        return await engine.plan(pp.change_description, pp.target_file, pp.change_type, pp.scope)
 
 
 class ConflictHandler(MethodHandler):
@@ -77,7 +75,7 @@ class WhyHandler(MethodHandler):
 
     @property
     def method(self) -> str:
-        return "smp/why"
+        return "smp/graph/why"
 
     async def handle(
         self,
@@ -102,7 +100,6 @@ class TelemetryHandler(MethodHandler):
         context: dict[str, Any],
     ) -> dict[str, Any]:
         tp = msgspec.convert(params, TelemetryParams)
-        engine = context["engine"]
         telemetry_engine = context.get("telemetry_engine")
         if not telemetry_engine:
             # Return basic stats if telemetry not configured

@@ -2,12 +2,6 @@
 
 from __future__ import annotations
 
-__import__("pysqlite3")
-import sys
-
-sys.modules["sqlite3"] = sys.modules.pop("pysqlite3")
-
-
 import pytest
 
 from smp.core.models import (
@@ -19,11 +13,11 @@ from smp.core.models import (
     StructuralProperties,
 )
 from smp.store.graph.neo4j_store import Neo4jGraphStore
-from smp.store.vector.chroma_store import ChromaVectorStore
 
 # ---------------------------------------------------------------------------
 # Neo4j fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="session")
 def neo4j_store() -> Neo4jGraphStore:
@@ -43,22 +37,9 @@ async def clean_graph(neo4j_store: Neo4jGraphStore):
 
 
 # ---------------------------------------------------------------------------
-# ChromaDB fixtures
-# ---------------------------------------------------------------------------
-
-@pytest.fixture()
-async def vector_store():
-    """Provide a clean in-memory ChromaDB vector store."""
-    import uuid
-    store = ChromaVectorStore(collection_name=f"smp_test_{uuid.uuid4().hex[:8]}")
-    await store.connect()
-    yield store
-    await store.close()
-
-
-# ---------------------------------------------------------------------------
 # Sample data factories
 # ---------------------------------------------------------------------------
+
 
 def make_node(
     id: str = "func_login",
