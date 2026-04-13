@@ -9,12 +9,15 @@ from __future__ import annotations
 from collections import deque
 from typing import Any
 
-from smp.core.models import EdgeType, GraphNode
+from smp.core.models import EdgeType, GraphNode, NodeType
 from smp.engine.interfaces import QueryEngine as QueryEngineInterface
 from smp.logging import get_logger
 from smp.store.interfaces import GraphStore
 
 log = get_logger(__name__)
+
+_HTTP_VERB_DECORATORS = {"get", "post", "put", "delete", "patch", "head", "options"}
+_UTILITY_PATH_SEGMENTS = {"/utils", "/lib", "/shared", "/helpers"}
 
 
 class DefaultQueryEngine(QueryEngineInterface):
@@ -120,36 +123,182 @@ class DefaultQueryEngine(QueryEngineInterface):
             return {"error": f"No nodes found for {file_path}"}
 
         file_node = file_nodes[0]
-        imports = await self._graph.get_edges(file_node.id, EdgeType.IMPORTS, direction="outgoing")
-        imported_by = await self._graph.get_edges(file_node.id, EdgeType.IMPORTS, direction="incoming")
-        defines = await self._graph.get_edges(file_node.id, EdgeType.DEFINES, direction="outgoing")
-        tests = await self._graph.get_edges(file_node.id, EdgeType.TESTS, direction="incoming")
+        file_id = file_node.id
 
-        functions_defined: list[dict[str, Any]] = []
-        classes_defined: list[dict[str, Any]] = []
+        imports = await self._graph.get_edges(file_id, EdgeType.IMPORTS, direction="outgoing")
+        imported_by = await self._graph.get_edges(file_id, EdgeType.IMPORTS, direction="incoming")
+        defines = await self._graph.get_edges(file_id, EdgeType.DEFINES, direction="outgoing")
+        tests_edges = await self._graph.get_edges(file_id, EdgeType.TESTS, direction="incoming")
+
+        defines_nodes: list[dict[str, Any]] = []
+        complexities: list[int] = []
+        exported_symbols: list[str] = []
+        http_decorators: list[str] = []
+        test_file_paths: list[str] = []
+
         for edge in defines:
             target = await self._graph.get_node(edge.target_id)
             if target:
-                d = self._node_to_dict(target)
-                if target.type.value == "Function":
-                    functions_defined.append(d)
-                elif target.type.value == "Class":
-                    classes_defined.append(d)
+                defines_nodes.append(self._node_to_dict(target))
+                complexities.append(target.structural.complexity)
+                exported_symbols.append(target.structural.name)
+                for dec in target.semantic.decorators:
+                    dec_lower = dec.lstrip("@").lower()
+                    if dec_lower in _HTTP_VERB_DECORATORS:
+                        http_decorators.append(dec)
 
-        caller_edges = await self._graph.get_edges(file_node.id, EdgeType.IMPORTS, direction="incoming")
-        warnings: list[str] = []
-        if len(caller_edges) > 10:
-            warnings.append(f"This file is imported by {len(caller_edges)} other files")
+        for te in tests_edges:
+            source = await self._graph.get_node(te.source_id)
+            if source and source.file_path not in test_file_paths:
+                test_file_paths.append(source.file_path)
+
+        has_tests = len(test_file_paths) > 0
+
+        related_patterns: list[dict[str, Any]] = []
+        all_nodes = await self._graph.find_nodes()
+        for candidate in all_nodes:
+            if candidate.id == file_id or candidate.file_path == file_path:
+                continue
+            if candidate.type == file_node.type:
+                name_sim = self._name_similarity(file_node.structural.name, candidate.structural.name)
+                if name_sim > 0.5:
+                    related_patterns.append(
+                        {
+                            "file_path": candidate.file_path,
+                            "name": candidate.structural.name,
+                            "similarity": round(name_sim, 2),
+                        }
+                    )
+        related_patterns.sort(key=lambda x: -x["similarity"])
+        related_patterns = related_patterns[:5]
+
+        entry_points: list[dict[str, Any]] = []
+        if http_decorators:
+            for edge in defines:
+                target = await self._graph.get_node(edge.target_id)
+                if target:
+                    target_http = [
+                        d for d in target.semantic.decorators if d.lstrip("@").lower() in _HTTP_VERB_DECORATORS
+                    ]
+                    if target_http:
+                        entry_points.append(
+                            {
+                                "name": target.structural.name,
+                                "decorators": target_http,
+                                "file_path": target.file_path,
+                            }
+                        )
+
+        data_flow_in: list[dict[str, Any]] = []
+        data_flow_out: list[dict[str, Any]] = []
+
+        callers_in = await self._graph.traverse(
+            file_id, EdgeType.CALLS, depth=depth, max_nodes=50, direction="incoming"
+        )
+        for caller in callers_in:
+            data_flow_in.append(
+                {
+                    "node_id": caller.id,
+                    "name": caller.structural.name,
+                    "file_path": caller.file_path,
+                }
+            )
+
+        callers_out = await self._graph.traverse(
+            file_id, EdgeType.CALLS, depth=depth, max_nodes=50, direction="outgoing"
+        )
+        for callee in callers_out:
+            data_flow_out.append(
+                {
+                    "node_id": callee.id,
+                    "name": callee.structural.name,
+                    "file_path": callee.file_path,
+                }
+            )
+
+        role = self._classify_role(file_node, imported_by, defines_nodes, http_decorators)
+        avg_complexity = round(sum(complexities) / max(len(complexities), 1), 1)
+        max_complexity = max(complexities, default=0)
+        blast_radius = len(imported_by)
+
+        imported_by_api = 0
+        for edge in imported_by:
+            source = await self._graph.get_node(edge.source_id)
+            if source and "/api" in source.file_path:
+                imported_by_api += 1
+
+        is_hot_node = blast_radius > 10 or max_complexity > 8
+        heat_score = blast_radius + max_complexity
+
+        if blast_radius > 10 or avg_complexity > 8:
+            risk_level = "high"
+        elif blast_radius > 3 or avg_complexity > 4:
+            risk_level = "medium"
+        else:
+            risk_level = "low"
+
+        summary = {
+            "role": role,
+            "blast_radius": blast_radius,
+            "api_layer_callers": imported_by_api,
+            "avg_complexity": avg_complexity,
+            "max_complexity": max_complexity,
+            "exported_symbols": exported_symbols,
+            "has_tests": has_tests,
+            "test_files": test_file_paths,
+            "is_hot_node": is_hot_node,
+            "heat_score": heat_score,
+            "risk_level": risk_level,
+        }
 
         return {
             "self": self._node_to_dict(file_node),
             "imports": [{"source": e.source_id, "target": e.target_id} for e in imports],
             "imported_by": [{"source": e.source_id, "target": e.target_id} for e in imported_by],
-            "functions_defined": functions_defined,
-            "classes_defined": classes_defined,
-            "tests": [e.source_id for e in tests],
-            "warnings": warnings,
+            "defines": defines_nodes,
+            "related_patterns": related_patterns,
+            "entry_points": entry_points,
+            "data_flow_in": data_flow_in,
+            "data_flow_out": data_flow_out,
+            "summary": summary,
         }
+
+    @staticmethod
+    def _name_similarity(name_a: str, name_b: str) -> float:
+        if not name_a or not name_b:
+            return 0.0
+        set_a = set(name_a.lower())
+        set_b = set(name_b.lower())
+        if not set_a or not set_b:
+            return 0.0
+        intersection = set_a & set_b
+        union = set_a | set_b
+        return len(intersection) / len(union)
+
+    def _classify_role(
+        self,
+        file_node: GraphNode,
+        imported_by: list[Any],
+        defines_nodes: list[dict[str, Any]],
+        http_decorators: list[str],
+    ) -> str:
+        path = file_node.file_path
+        if "/test" in path or "/spec" in path:
+            return "test"
+        if file_node.type == NodeType.CONFIG:
+            return "config"
+        if http_decorators:
+            return "endpoint"
+        if "/routes" in path or "/controllers" in path:
+            return "endpoint"
+        incoming_imports = len(imported_by)
+        if "/services" in path and incoming_imports > 0:
+            return "service"
+        if incoming_imports > 5 and any(seg in path for seg in _UTILITY_PATH_SEGMENTS):
+            return "core_utility"
+        if incoming_imports == 0 and not defines_nodes:
+            return "isolated"
+        return "module"
 
     async def assess_impact(self, entity: str, change_type: str = "delete") -> dict[str, Any]:
         node = await self._graph.get_node(entity)

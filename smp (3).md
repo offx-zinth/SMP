@@ -21,10 +21,30 @@ A framework for giving AI agents a "programmer's brain" — not text retrieval, 
 │  │             │   │  eBPF Runtime│   │             │           │
 │  └─────────────┘   └──────────────┘   └──────┬──────┘           │
 │                                              │                  │
-│  ┌──────────────────────────────────────────▼───────────────┐   │
-│  │                    MEMORY STORE (Graph DB)               │   │
-│  │  Structure · CALLS_STATIC · CALLS_RUNTIME · Sessions ·   │   │
-│  │  Sandboxes · Audit Log · Telemetry · Full-Text (BM25)    │   │
+│  ┌───────────────────────────────────────────▼──────────────┐   │
+│  │                    MEMORY STORE                          │   │
+│  │                                                          │   │
+│  │  ┌─────────────────────────────────────┐                 │   │
+│  │  │  GRAPH DB (Neo4j)                   │                 │   │
+│  │  │  Structure · CALLS_STATIC           │                 │   │
+│  │  │  CALLS_RUNTIME · PageRank           │                 │   │
+│  │  │  Sessions · Audit · Telemetry       │                 │   │
+│  │  │  Full-Text Index (BM25)             │                 │   │
+│  │  └─────────────────────────────────────┘                 │   │
+│  │                                                          │   │
+│  │  ┌─────────────────────────────────────┐                 │   │
+│  │  │  VECTOR INDEX (ChromaDB)            │                 │   │
+│  │  │  code_embedding per node            │                 │   │
+│  │  │  (signature + docstring, at         │                 │   │
+│  │  │   index time — no LLM at query time)│                 │   │
+│  │  └─────────────────────────────────────┘                 │   │
+│  │                                                          │   │
+│  │  ┌─────────────────────────────────────┐                 │   │
+│  │  │  MERKLE INDEX                       │                 │   │
+│  │  │  SHA-256 leaf per file node         │                 │   │
+│  │  │  Package subtree hashes             │                 │   │
+│  │  │  Root hash = full codebase state    │                 │   │
+│  │  └─────────────────────────────────────┘                 │   │
 │  └──────────────────────────────┬───────────────────────────┘   │
 └─────────────────────────────────┼───────────────────────────────┘
                                   │
@@ -35,11 +55,10 @@ A framework for giving AI agents a "programmer's brain" — not text retrieval, 
 │  QUERY ENGINE   │   │   SANDBOX RUNTIME    │   │  SWARM LAYER  │
 │  Navigator      │   │  Ephemeral microVM/  │   │  Peer Review  │
 │  Reasoner       │   │  Docker + CoW fork   │   │  PR Handoff   │
-│  Telemetry      │   │  eBPF trace capture  │   │               │
-└────────┬────────┘   │  Egress-firewalled   │   └───────┬───────┘
-         │            └──────────┬───────────┘           │
-         └──────────────┬────────┘───────────────────────┘
-                        │                       
+│  SeedWalkEngine │   │  eBPF trace capture  │   │               │
+│  Telemetry      │   │  Egress-firewalled   │   └───────┬───────┘
+└────────┬────────┘   └──────────┬───────────┘           │
+         └──────────────┬────────┘               ────────┘
                         │ SMP Protocol (Dispatcher)
                         ▼
         ┌─────────────────────────────────────────────┐
@@ -112,6 +131,7 @@ A framework for giving AI agents a "programmer's brain" — not text retrieval, 
 │  Interface     │ Type definition/interface                  │
 │  Test          │ Test file/function                         │
 │  Config        │ Configuration file                         │
+│  Community     │ Louvain-detected structural cluster        │
 └─────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐
@@ -127,6 +147,8 @@ A framework for giving AI agents a "programmer's brain" — not text retrieval, 
 │  TESTS         │ Test tests Function/Class                  │
 │  USES          │ Function uses Variable/Type                │
 │  REFERENCES    │ Variable references Variable               │
+│  MEMBER_OF     │ Node belongs to Community                  │
+│  BRIDGES       │ Community connects to Community            │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -138,6 +160,7 @@ A framework for giving AI agents a "programmer's brain" — not text retrieval, 
     "type": "Function",
     "name": "authenticateUser",
     "file": "src/auth/login.ts",
+    "community_id": "comm_auth_core",
     "signature": "authenticateUser(email: string, password: string): Promise<Token>",
     "metrics": {
         "complexity": 4,
@@ -147,7 +170,8 @@ A framework for giving AI agents a "programmer's brain" — not text retrieval, 
     "relationships": {
         "CALLS": ["func_hashPassword", "func_compareHash", "func_generateToken"],
         "DEPENDS_ON": ["class_UserModel"],
-        "DEFINED_IN": "file_auth_login_ts"
+        "DEFINED_IN": "file_auth_login_ts",
+        "MEMBER_OF": "comm_auth_core"
     }
 }
 ```
@@ -727,10 +751,9 @@ CALL db.index.fulltext.createNodeIndex(
     "id": "func_authenticate_user",
     "structural": { "...": "..." },
     "semantic": {
-        "status": "enriched",          // "enriched" | "manually_annotated" | "no_metadata"
+        "status": "enriched",
         "docstring": "Validates user credentials and returns a signed JWT for the session.",
-        "description": null,           // set only if manually annotated via smp/annotate
-        "drift_suspected": true,    // AST complexity changed by >20% but docstring hash is identical
+        "description": null,
         "inline_comments": [
             {"line": 18, "text": "compare against bcrypt hash, not plaintext"}
         ],
@@ -744,15 +767,265 @@ CALL db.index.fulltext.createNodeIndex(
         "manually_set": false,
         "source_hash": "a3f9c12d",
         "enriched_at": "2025-02-15T10:30:00Z"
+    },
+    "vector": {
+        "code_embedding": [0.021, -0.134, 0.087, "..."],
+        "embedding_input": "func authenticateUser(email: string, password: string): Promise<Token> — Validates user credentials and returns a signed JWT for the session.",
+        "model": "text-embedding-3-small",
+        "indexed_at": "2025-02-15T10:30:01Z"
     }
+}
+```
+
+> **Embedding policy:** `code_embedding` is generated **once at index time** from `signature + docstring`. It is stored in ChromaDB keyed by `node_id`. At query time (`smp/locate`), ChromaDB is called for **seed discovery only** — the actual retrieval, ranking, and response assembly are pure graph + arithmetic. No generative LLM is involved at any point.
+
+---
+
+### D. Community Detection
+
+**Purpose:** Automatically partition the codebase graph into structural clusters at **two levels** — coarse (architecture overview) and fine (search routing) — so agents can reason about domain boundaries and `smp/locate` Phase 0 narrows seed search to ~200 nodes instead of all 100k.
+
+**Two-level hierarchy (mirrors GraphRAG):**
+
+```
+Level 0 — COARSE (global architecture view)
+  e.g. "backend_core", "api_gateway", "data_layer"
+  → Used by architecture agents to understand module ownership.
+  → smp/community/boundaries shows coupling strength between these.
+
+Level 1 — FINE (search routing)
+  e.g. "auth_core", "auth_oauth", "payments_stripe", "payments_refunds"
+  → Subdivisions of coarse communities.
+  → Used by smp/locate Phase 0 to scope seed search to ~200 nodes.
+  → Every node carries both community_id_l0 and community_id_l1.
+```
+
+**How it works — purely topological, no LLM:**
+
+```
+1. Run Louvain at two resolutions via Neo4j GDS:
+     resolution=0.5 → fewer, larger communities  (Level 0 / coarse)
+     resolution=1.5 → more, smaller communities  (Level 1 / fine)
+
+2. For each community at each level, derive label from topology:
+   → majority_path_prefix: most common src/ subdirectory among members
+   → top_tags: most frequent semantic tags across enriched members
+   → centroid_embedding: mean of all member code_embeddings (ChromaDB)
+     — used for community-level vector routing in smp/locate Phase 0
+
+3. Write community_id_l0 + community_id_l1 onto every node as properties.
+   Create Community nodes at both levels, link fine → coarse via CHILD_OF.
+   Detect cross-community edges → write BRIDGES with coupling_weight.
+```
+
+**Community Node schema:**
+
+```json
+{
+    "id": "comm_auth_core",
+    "type": "Community",
+    "level": 1,
+    "parent_community": "comm_backend_core",
+    "label": "auth",
+    "majority_path_prefix": "src/auth",
+    "top_tags": ["auth", "jwt", "session", "credentials"],
+    "member_count": 47,
+    "file_count": 6,
+    "internal_edge_count": 183,
+    "external_edge_count": 12,
+    "modularity_score": 0.74,
+    "centroid_embedding_id": "centroid_comm_auth_core",
+    "detected_at": "2025-02-15T10:00:00Z"
+}
+```
+
+**Protocol:**
+
+```json
+// smp/community/detect — Run Louvain at two resolutions, write community_id_l0
+// and community_id_l1 to all nodes. Triggered at index time and when smp/sync
+// detects structural changes affecting >10% of nodes.
+{
+    "jsonrpc": "2.0",
+    "method": "smp/community/detect",
+    "params": {
+        "algorithm":          "louvain",
+        "relationship_types": ["CALLS_STATIC", "CALLS_RUNTIME", "IMPORTS"],
+        "levels": [
+            {"level": 0, "resolution": 0.5,  "label": "coarse"},
+            {"level": 1, "resolution": 1.5,  "label": "fine"}
+        ],
+        "min_community_size": 5
+    },
+    "id": 19
+}
+
+// Response
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "nodes_assigned": 1240,
+        "bridge_edges":   38,
+        "levels": {
+            "0": {"communities_found": 5,  "modularity": 0.61},
+            "1": {"communities_found": 14, "modularity": 0.74}
+        },
+        "coarse_communities": [
+            {"id": "comm_backend_core", "label": "backend_core", "member_count": 320, "fine_children": 4},
+            {"id": "comm_data_layer",   "label": "data_layer",   "member_count": 280, "fine_children": 3},
+            {"id": "comm_api_gateway",  "label": "api_gateway",  "member_count": 410, "fine_children": 5}
+        ],
+        "fine_communities": [
+            {"id": "comm_auth_core",     "parent": "comm_backend_core", "label": "auth",         "member_count": 47},
+            {"id": "comm_payments",      "parent": "comm_backend_core", "label": "payments",     "member_count": 83},
+            {"id": "comm_db_models",     "parent": "comm_data_layer",   "label": "db",           "member_count": 61},
+            {"id": "comm_api_layer",     "parent": "comm_api_gateway",  "label": "api",          "member_count": 112},
+            {"id": "comm_notifications", "parent": "comm_backend_core", "label": "notifications","member_count": 29}
+        ]
+    },
+    "id": 19
+}
+```
+
+```json
+// smp/community/list — List all communities at a given level
+{
+    "jsonrpc": "2.0",
+    "method": "smp/community/list",
+    "params": {
+        "level": 1   // 0 = coarse, 1 = fine, omit = both levels
+    }
+}
+
+// Response
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "total": 14,
+        "communities": [
+            {
+                "id": "comm_auth_core",
+                "level": 1,
+                "parent_community": "comm_backend_core",
+                "label": "auth",
+                "majority_path_prefix": "src/auth",
+                "top_tags": ["auth", "jwt", "session"],
+                "member_count": 47,
+                "file_count": 6,
+                "internal_edge_count": 183,
+                "external_edge_count": 12,
+                "modularity_score": 0.74,
+                "bridge_communities": ["comm_db_models", "comm_api_layer"]
+            }
+        ]
+    }
+}
+```
+
+```json
+// smp/community/get — Get all nodes in a specific community
+{
+    "jsonrpc": "2.0",
+    "method": "smp/community/get",
+    "params": {
+        "community_id":    "comm_auth_core",
+        "node_types":      ["Function", "Class"],
+        "include_bridges": true
+    },
+    "id": 20
+}
+
+// Response
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "community_id": "comm_auth_core",
+        "level": 1,
+        "parent_community": "comm_backend_core",
+        "label": "auth",
+        "member_count": 47,
+        "members": [
+            {
+                "id": "func_authenticate_user",
+                "type": "Function",
+                "name": "authenticateUser",
+                "file": "src/auth/login.ts",
+                "pagerank": 0.042,
+                "heat_score": 96
+            }
+        ],
+        "bridge_edges": [
+            {
+                "from": "func_authenticate_user",
+                "to": "class_UserModel",
+                "edge_type": "CALLS_STATIC",
+                "to_community": "comm_db_models",
+                "coupling_weight": 0.31
+            }
+        ]
+    },
+    "id": 20
+}
+```
+
+```json
+// smp/community/boundaries — Coupling strength between all community pairs.
+// Architecture agents use this to understand which domains are tightly coupled
+// and identify the exact bridge nodes responsible for cross-domain dependencies.
+{
+    "jsonrpc": "2.0",
+    "method": "smp/community/boundaries",
+    "params": {
+        "level":        0,      // 0 = coarse module boundaries, 1 = fine boundaries
+        "min_coupling": 0.05    // omit pairs below this weight
+    },
+    "id": 21
+}
+
+// Response
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "level": 0,
+        "boundaries": [
+            {
+                "from_community":  "comm_backend_core",
+                "to_community":    "comm_data_layer",
+                "edge_count":      83,
+                "coupling_weight": 0.61,
+                "bridge_nodes": [
+                    {"id": "class_UserModel",        "type": "Class",    "side": "data_layer",   "in_degree_from_peer": 12},
+                    {"id": "class_OrderModel",       "type": "Class",    "side": "data_layer",   "in_degree_from_peer": 9},
+                    {"id": "func_authenticate_user", "type": "Function", "side": "backend_core", "out_degree_to_peer": 7}
+                ]
+            },
+            {
+                "from_community":  "comm_backend_core",
+                "to_community":    "comm_api_gateway",
+                "edge_count":      47,
+                "coupling_weight": 0.38,
+                "bridge_nodes": [
+                    {"id": "class_AuthService", "type": "Class", "side": "backend_core", "out_degree_to_peer": 14}
+                ]
+            },
+            {
+                "from_community":  "comm_data_layer",
+                "to_community":    "comm_api_gateway",
+                "edge_count":      11,
+                "coupling_weight": 0.09,
+                "bridge_nodes": [
+                    {"id": "func_serialize_response", "type": "Function", "side": "api_gateway", "in_degree_from_peer": 11}
+                ]
+            }
+        ]
+    },
+    "id": 21
 }
 ```
 
 ---
 
 ## Part 2: The Query Engine
-
-> **Token Optimization (LLM UX):** All Query Engine endpoints (`smp/context`, `smp/flow`, `smp/navigate`) support an `accept: "text/markdown"` header. Instead of raw JSON, the server compiles the graph data into a dense, token-optimized Markdown briefing designed specifically for LLM ingestion, preventing context-window exhaustion.
 
 ### Query Types
 
@@ -770,40 +1043,323 @@ CALL db.index.fulltext.createNodeIndex(
 ### Query Engine Implementation
 
 ```python
-class StructuralQueryEngine:
-    def __init__(self, graph_db):
-        self.graph = graph_db
-    
-    def navigate(self, entity_name: str, direction: str = "to"):
-        """Find entity and its relationships"""
-        pass
-    
-    def trace(self, start_id: str, relationship_type: str, depth: int = 3):
-        """Follow relationship chain"""
-        pass
-    
-    def get_context(self, file_path: str, scope: str = "edit"):
+# smp/engine/query.py
+import msgspec
+from typing import Sequence
+from neo4j import AsyncSession
+import chromadb
+
+
+# ── Data Models (msgspec.Struct — zero-copy, schema-validated) ──────────────
+
+class SeedNode(msgspec.Struct, frozen=True):
+    node_id:          str
+    node_type:        str
+    name:             str
+    file:             str
+    signature:        str
+    docstring:        str | None
+    tags:             list[str]
+    community_id:     str | None   # which community this node belongs to
+    vector_score:     float
+    pagerank:         float
+    heat_score:       int
+
+class WalkNode(msgspec.Struct, frozen=True):
+    node_id:          str
+    node_type:        str
+    name:             str
+    file:             str
+    signature:        str
+    docstring:        str | None
+    community_id:     str | None
+    edge_type:        str
+    edge_direction:   str
+    hop:              int
+    is_bridge:        bool         # True if this edge crosses community boundaries
+    pagerank:         float
+    heat_score:       int
+
+class RankedResult(msgspec.Struct, frozen=True):
+    node_id:          str
+    node_type:        str
+    name:             str
+    file:             str
+    signature:        str
+    docstring:        str | None
+    tags:             list[str]
+    community_id:     str | None
+    final_score:      float
+    vector_score:     float
+    pagerank:         float
+    heat_score:       int
+    is_seed:          bool
+    reachable_from:   list[str]
+
+class LocateResponse(msgspec.Struct, frozen=True):
+    query:            str
+    routed_community: str | None   # community routing hit — None if cross-community query
+    seed_count:       int
+    total_walked:     int
+    results:          list[RankedResult]
+    structural_map:   list[dict]
+
+
+# ── Seed & Walk Engine ───────────────────────────────────────────────────────
+
+class SeedWalkEngine:
+    """
+    Implements the Community-Routed Graph RAG pipeline for smp/locate.
+
+    Phase 0 — ROUTE:   Compare query embedding against Level-1 (fine) community centroid
+                        embeddings stored in ChromaDB. Routes to the best-matching fine
+                        community (scoped to ~200 nodes). Low confidence → global search.
+    Phase 1 — SEED:   ChromaDB vector search scoped to routed fine community (or global).
+                        → Top-K nodes whose code_embedding is closest to query.
+    Phase 2 — WALK:   Single Cypher N-hop traversal from seeds.
+                        Follows CALLS_STATIC | CALLS_RUNTIME | IMPORTS | DEFINES.
+                        Crosses community boundaries via BRIDGES edges.
+    Phase 3 — RANK:   Composite score = α·vector + β·pagerank + γ·heat.
+    Phase 4 — ASSEMBLE: Deduplicated RankedResult list + structural_map with community labels.
+
+    No LLM calls at any phase.
+    """
+
+    ALPHA = 0.50
+    BETA  = 0.30
+    GAMMA = 0.20
+    ROUTE_CONFIDENCE_THRESHOLD = 0.65   # below this → skip routing, search globally
+
+    def __init__(self, neo4j_session: AsyncSession, chroma_collection: chromadb.Collection):
+        self._graph  = neo4j_session
+        self._chroma = chroma_collection
+
+    # ── Phase 0: Community Routing ────────────────────────────────────────────
+
+    async def _route_to_community(self, query: str) -> tuple[str | None, float]:
         """
-        Proactive context gathering.
-        
-        scope options:
-        - "edit": What do I need to edit this file safely?
-        - "create": What pattern should I follow for new file?
-        - "debug": What's the data flow through this file?
+        Compare the query embedding against stored community centroid embeddings.
+        Returns (community_id, confidence) if a strong match is found.
+        Returns (None, 0.0) if no community clears the threshold — fallback to global search.
+
+        Centroid embeddings are stored in ChromaDB under the 'centroids' collection,
+        keyed by community_id. Computed at smp/community/detect time, not per-query.
         """
-        pass
-    
-    def assess_impact(self, entity_id: str, change_type: str):
-        """What would break if I change/delete this?"""
-        pass
-    
-    def locate(self, query: str):
-        """Find code by keyword match against names, docstrings, and tags"""
-        pass
-    
-    def trace_flow(self, start: str, end: str = None):
-        """Trace execution/data flow"""
-        pass
+        centroids = self._chroma.query(
+            collection="centroids",
+            query_texts=[query],
+            n_results=1,
+            include=["metadatas", "distances"]
+        )
+        if not centroids["metadatas"][0]:
+            return None, 0.0
+
+        confidence = 1.0 - centroids["distances"][0][0]
+        if confidence < self.ROUTE_CONFIDENCE_THRESHOLD:
+            return None, confidence     # query spans multiple communities — search globally
+
+        community_id = centroids["metadatas"][0][0]["community_id"]
+        return community_id, confidence
+
+    # ── Phase 1: Seed ────────────────────────────────────────────────────────
+
+    async def _seed(self, query: str, seed_k: int, community_id: str | None) -> list[SeedNode]:
+        """
+        Vector search scoped to community_id when routing hit.
+        Falls back to global search when community_id is None.
+        """
+        where_filter = {"community_id": community_id} if community_id else None
+        results = self._chroma.query(
+            query_texts=[query],
+            n_results=seed_k,
+            where=where_filter,
+            include=["metadatas", "distances"]
+        )
+        seeds = []
+        for meta, dist in zip(results["metadatas"][0], results["distances"][0]):
+            seeds.append(SeedNode(
+                node_id      = meta["node_id"],
+                node_type    = meta["node_type"],
+                name         = meta["name"],
+                file         = meta["file"],
+                signature    = meta["signature"],
+                docstring    = meta.get("docstring"),
+                tags         = meta.get("tags", []),
+                vector_score = 1.0 - dist,   # ChromaDB returns L2 distance; convert to similarity
+                pagerank     = meta["pagerank"],
+                heat_score   = meta["heat_score"],
+            ))
+        return seeds
+
+    # ── Phase 2: Walk ─────────────────────────────────────────────────────────
+
+    async def _walk(self, seed_ids: list[str], hops: int) -> list[WalkNode]:
+        """
+        Single Cypher query — no N+1.
+        Traverses CALLS_STATIC, CALLS_RUNTIME, IMPORTS, and DEFINES edges
+        (Senthil Global Linker edges) up to `hops` depth from each seed.
+        """
+        cypher = """
+        UNWIND $seed_ids AS seed_id
+        MATCH (seed {id: seed_id})
+        CALL apoc.path.subgraphNodes(seed, {
+            relationshipFilter: "CALLS_STATIC>|CALLS_RUNTIME>|IMPORTS>|DEFINES>",
+            minLevel: 1,
+            maxLevel: $hops
+        }) YIELD node
+        MATCH (seed)-[r*1..$hops]-(node)
+        WITH seed, node,
+             [rel IN r | type(rel)]          AS edge_types,
+             [rel IN r | startNode(rel).id]  AS edge_starts,
+             size(r)                         AS hop_count
+        RETURN
+            node.id           AS node_id,
+            node.type         AS node_type,
+            node.name         AS name,
+            node.file         AS file,
+            node.signature    AS signature,
+            node.docstring    AS docstring,
+            edge_types[-1]    AS edge_type,
+            CASE WHEN edge_starts[-1] = node.id THEN 'in' ELSE 'out' END AS edge_direction,
+            hop_count,
+            node.pagerank     AS pagerank,
+            node.heat_score   AS heat_score,
+            seed.id           AS seed_id
+        """
+        records = await self._graph.run(cypher, seed_ids=seed_ids, hops=hops)
+        walked: dict[str, WalkNode] = {}
+        for r in records:
+            if r["node_id"] not in walked:
+                walked[r["node_id"]] = WalkNode(
+                    node_id        = r["node_id"],
+                    node_type      = r["node_type"],
+                    name           = r["name"],
+                    file           = r["file"],
+                    signature      = r["signature"],
+                    docstring      = r["docstring"],
+                    edge_type      = r["edge_type"],
+                    edge_direction = r["edge_direction"],
+                    hop            = r["hop_count"],
+                    pagerank       = r["pagerank"] or 0.0,
+                    heat_score     = r["heat_score"] or 0,
+                )
+        return list(walked.values())
+
+    # ── Phase 3: Rank ─────────────────────────────────────────────────────────
+
+    def _rank(
+        self,
+        seeds:    list[SeedNode],
+        walked:   list[WalkNode],
+        top_k:    int,
+    ) -> list[RankedResult]:
+        """
+        Composite score: α·vector_score + β·pagerank_norm + γ·heat_norm
+        vector_score  already 0–1 from ChromaDB.
+        pagerank_norm  = pagerank / max_pagerank in result set.
+        heat_norm      = heat_score / 100.
+        """
+        seed_map   = {s.node_id: s for s in seeds}
+        max_pr     = max((w.pagerank for w in walked), default=1.0) or 1.0
+
+        # Seeds are also results — build from seed list first
+        results: dict[str, RankedResult] = {}
+
+        for s in seeds:
+            score = (
+                self.ALPHA * s.vector_score +
+                self.BETA  * (s.pagerank / max_pr) +
+                self.GAMMA * (s.heat_score / 100)
+            )
+            results[s.node_id] = RankedResult(
+                node_id       = s.node_id,
+                node_type     = s.node_type,
+                name          = s.name,
+                file          = s.file,
+                signature     = s.signature,
+                docstring     = s.docstring,
+                tags          = s.tags,
+                final_score   = round(score, 4),
+                vector_score  = s.vector_score,
+                pagerank      = s.pagerank,
+                heat_score    = s.heat_score,
+                is_seed       = True,
+                reachable_from= [s.node_id],
+            )
+
+        for w in walked:
+            if w.node_id in results:
+                continue
+            seed_pr = seed_map.get(w.node_id)
+            v_score = seed_pr.vector_score if seed_pr else 0.0
+            score = (
+                self.ALPHA * v_score +
+                self.BETA  * (w.pagerank / max_pr) +
+                self.GAMMA * (w.heat_score / 100)
+            )
+            results[w.node_id] = RankedResult(
+                node_id       = w.node_id,
+                node_type     = w.node_type,
+                name          = w.name,
+                file          = w.file,
+                signature     = w.signature,
+                docstring     = w.docstring,
+                tags          = [],
+                final_score   = round(score, 4),
+                vector_score  = v_score,
+                pagerank      = w.pagerank,
+                heat_score    = w.heat_score,
+                is_seed       = False,
+                reachable_from= [],
+            )
+
+        ranked = sorted(results.values(), key=lambda r: r.final_score, reverse=True)
+        return ranked[:top_k]
+
+    # ── Phase 4: Structural Map ───────────────────────────────────────────────
+
+    def _build_structural_map(
+        self,
+        results:  list[RankedResult],
+        walked:   list[WalkNode],
+    ) -> list[dict]:
+        """
+        Build an adjacency list of edges between result nodes only.
+        Used by Accept: text/markdown responses to render the call chain section.
+        """
+        result_ids = {r.node_id for r in results}
+        edges = []
+        for w in walked:
+            if w.node_id in result_ids:
+                edges.append({
+                    "from":      w.node_id,
+                    "to":        w.node_id,
+                    "edge_type": w.edge_type,
+                    "hop":       w.hop,
+                })
+        return edges
+
+    # ── Public entrypoint ─────────────────────────────────────────────────────
+
+    async def locate(
+        self,
+        query:   str,
+        seed_k:  int = 3,
+        hops:    int = 2,
+        top_k:   int = 10,
+    ) -> LocateResponse:
+        seeds   = await self._seed(query, seed_k)
+        walked  = await self._walk([s.node_id for s in seeds], hops)
+        ranked  = self._rank(seeds, walked, top_k)
+        smap    = self._build_structural_map(ranked, walked)
+
+        return LocateResponse(
+            query          = query,
+            seed_count     = len(seeds),
+            total_walked   = len(walked),
+            results        = ranked,
+            structural_map = smap,
+        )
 ```
 
 ---
@@ -966,14 +1522,224 @@ def _classify_role(self, file_node) -> str:
 ```
 
 ```json
-// smp/reindex - Full re-index (for major refactors)
+// smp/sync — Merkle-diff sync. Client sends its current root hash and a
+// flat map of { file_path → sha256(content) }. Server compares against its
+// own Merkle tree and returns exactly which files need to be pushed.
+// O(log n) — only walks subtrees where hashes diverge.
 {
     "jsonrpc": "2.0",
-    "method": "smp/reindex",
+    "method": "smp/sync",
     "params": {
-        "scope": "full" | "package:src/auth"
+        "client_root_hash": "e3b0c44298fc",
+        "file_hashes": {
+            "src/auth/login.ts":      "a3f9c12d",
+            "src/auth/register.ts":   "99de12ab",
+            "src/utils/crypto.ts":    "c3a1f004",
+            "src/db/models/user.ts":  "7f3b9e21"
+        }
     },
     "id": 3
+}
+
+// Response — server returns the minimal diff, not a full file list
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "server_root_hash": "f7c2a19b3d84",
+        "in_sync": false,
+        "diff": {
+            "stale_on_server": [
+                {
+                    "file": "src/auth/login.ts",
+                    "client_hash": "a3f9c12d",
+                    "server_hash": "b7d2e91f",
+                    "action": "push"      // client is newer — push to server
+                }
+            ],
+            "missing_on_client": [
+                {
+                    "file": "src/auth/oauth.ts",
+                    "server_hash": "44f1c8d9",
+                    "action": "pull"      // server has file client doesn't know about
+                }
+            ],
+            "deleted_on_server": [
+                {
+                    "file": "src/auth/legacy.ts",
+                    "action": "remove_from_graph"
+                }
+            ],
+            "unchanged": 2                // count only — no need to list them
+        }
+    },
+    "id": 3
+}
+
+// Response — already in sync, nothing to do
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "server_root_hash": "e3b0c44298fc",
+        "in_sync": true,
+        "diff": {
+            "stale_on_server": [],
+            "missing_on_client": [],
+            "deleted_on_server": [],
+            "unchanged": 4
+        }
+    },
+    "id": 3
+}
+```
+
+```json
+// smp/merkle/tree — Return the server's full Merkle tree.
+// Agents use this to build a local copy for offline diff before connecting.
+{
+    "jsonrpc": "2.0",
+    "method": "smp/merkle/tree",
+    "params": {
+        "scope": "full"   // "full" | "package:src/auth"
+    },
+    "id": 4
+}
+
+// Response — hierarchical hash tree, mirrors the package/file structure
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "root_hash": "f7c2a19b3d84",
+        "tree": {
+            "src": {
+                "hash": "9c4f2a1b",
+                "children": {
+                    "auth": {
+                        "hash": "3d8e7f12",
+                        "children": {
+                            "login.ts":    {"hash": "b7d2e91f", "node_count": 4},
+                            "register.ts": {"hash": "99de12ab", "node_count": 3},
+                            "oauth.ts":    {"hash": "44f1c8d9", "node_count": 6}
+                        }
+                    },
+                    "utils": {
+                        "hash": "1a3c9f00",
+                        "children": {
+                            "crypto.ts": {"hash": "c3a1f004", "node_count": 5}
+                        }
+                    }
+                }
+            }
+        }
+    },
+    "id": 4
+}
+```
+
+---
+
+#### 1b. Secure Index Distribution
+
+A new agent or a new SMP server instance does not need to re-index the entire codebase from scratch. The current server exports a cryptographically signed snapshot of its index. The recipient compares Merkle root hashes — if they match, it imports directly. If they differ, it only re-indexes the diverging subtrees.
+
+```
+┌─────────────────┐           ┌─────────────────┐
+│  SMP Server A   │  export   │  SMP Server B   │
+│  (source)       │──────────▶│  (new instance) │
+│                 │  signed   │                 │
+│  root: f7c2a19b │  snapshot │  1. verify sig  │
+│                 │           │  2. compare root │
+└─────────────────┘           │  3a. match →    │
+                               │     import all  │
+                               │  3b. differ →   │
+                               │     sync diff   │
+                               └─────────────────┘
+```
+
+```json
+// smp/index/export — Package the current index as a signed, portable snapshot.
+// Used for fast agent onboarding and multi-instance distribution.
+{
+    "jsonrpc": "2.0",
+    "method": "smp/index/export",
+    "params": {
+        "scope": "full",              // "full" | "package:<path>"
+        "signing_key_id": "key_prod_01"
+    },
+    "id": 5
+}
+
+// Response
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "snapshot_id": "snap_4f8a2c",
+        "root_hash": "f7c2a19b3d84",
+        "scope": "full",
+        "node_count": 1240,
+        "edge_count": 8430,
+        "signed_at": "2025-02-15T10:00:00Z",
+        "signature": "sha256:a1b2c3...",
+        "export_url": "smp://snapshots/snap_4f8a2c.tar.zst"
+    },
+    "id": 5
+}
+```
+
+```json
+// smp/index/import — Load a signed snapshot into this server instance.
+// Verifies signature and root hash before touching the graph.
+{
+    "jsonrpc": "2.0",
+    "method": "smp/index/import",
+    "params": {
+        "snapshot_id": "snap_4f8a2c",
+        "source_url": "smp://snapshots/snap_4f8a2c.tar.zst",
+        "expected_root_hash": "f7c2a19b3d84",
+        "verify_signature": true
+    },
+    "id": 6
+}
+
+// Response: hashes match → full import, no re-indexing needed
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "status": "imported",
+        "root_hash_verified": true,
+        "signature_verified": true,
+        "nodes_imported": 1240,
+        "edges_imported": 8430,
+        "re_indexed_files": 0,
+        "duration_ms": 840
+    },
+    "id": 6
+}
+
+// Response: hashes differ → partial re-index of diverging subtrees only
+{
+    "jsonrpc": "2.0",
+    "result": {
+        "status": "partial_import",
+        "root_hash_verified": false,
+        "signature_verified": true,
+        "nodes_imported": 1218,
+        "edges_imported": 8390,
+        "diverging_packages": ["src/auth", "src/api"],
+        "re_indexed_files": 7,
+        "duration_ms": 2310
+    },
+    "id": 6
+}
+
+// Response: signature invalid → rejected entirely
+{
+    "jsonrpc": "2.0",
+    "error": {
+        "code": -32010,
+        "message": "signature_invalid",
+        "data": {"snapshot_id": "snap_4f8a2c", "key_id": "key_prod_01"}
+    },
+    "id": 6
 }
 ```
 
@@ -1080,8 +1846,7 @@ def _classify_role(self, file_node) -> str:
             "test_files": ["tests/auth.test.ts"],
             "is_hot_node": true,
             "heat_score": 96,
-            "risk_level": "high",
-            "required_services": ["postgres:15", "redis:7"]
+            "risk_level": "high"
         },
         "self": {
             "id": "file_auth_login_ts",
@@ -1172,50 +1937,171 @@ def _classify_role(self, file_node) -> str:
 
 ---
 
-#### 4. Keyword Search
+#### 4. Community-Routed Graph RAG (`smp/locate`)
+
+`smp/locate` is the primary code discovery method. It runs a five-phase Graph RAG pipeline — no LLM at any stage:
+
+```
+Phase 0 — ROUTE:   Compare query against Level-1 (fine) community centroid embeddings.
+                   → Best-match fine community returned with confidence score.
+                   → If confidence ≥ 0.65: scope seed search to that fine community (~200 nodes).
+                   → If confidence < 0.65: query spans multiple communities — search globally.
+                   Key Graph RAG insight: narrow the search space BEFORE seeding.
+                   Architecture agents can also force Level-0 routing to get module-level results.
+
+Phase 1 — SEED:   ChromaDB vector search, scoped to community or global.
+                   → Top-K nodes whose code_embedding is closest to the query.
+                   → No generative model; embedding of the query string only.
+
+Phase 2 — WALK:   Single Cypher N-hop traversal from each seed.
+                   → Follows CALLS_STATIC | CALLS_RUNTIME | IMPORTS | DEFINES edges.
+                   → Crosses community boundaries via BRIDGES edges when relevant.
+                   → One query, zero N+1 overhead.
+
+Phase 3 — RANK:   Composite score per node:
+                   final_score = 0.50 × vector_score
+                               + 0.30 × (pagerank / max_pagerank)
+                               + 0.20 × (heat_score / 100)
+
+Phase 4 — ASSEMBLE: Deduplicated ranked list + structural_map adjacency list.
+                    Results include community_id so the agent knows which domain each node lives in.
+```
+
+**PageRank** is pre-computed by Neo4j GDS at index time and stored as a property on every node. **Community centroids** are computed at `smp/community/detect` time. Neither is computed per-query.
 
 ```json
-// smp/locate - Find nodes by BM25-ranked keyword search against names, docstrings, and tags.
-// Backed by the same Neo4j Full-Text Index as smp/search.
-// Ranking order: exact name match → name substring → BM25 score on docstring/tags.
+// Request
 {
     "jsonrpc": "2.0",
     "method": "smp/locate",
     "params": {
-        "query": "user registration",
-        "fields": ["name", "docstring", "tags"],
-        "node_types": ["Function", "Class"],
-        "top_k": 5
+        "query":       "user registration",
+        "seed_k":      3,
+        "hops":        2,
+        "top_k":       10,
+        "node_types":  ["Function", "Class"],
+        "community_id": null    // null = auto-route via Phase 0; set explicitly to force a community
     },
     "id": 8
 }
 
-// Response — ranked by match tier then BM25 score within tier
+// Response (Accept: application/json)
 {
     "jsonrpc": "2.0",
     "result": {
-        "matches": [
+        "query":             "user registration",
+        "routed_community":  {
+            "id":         "comm_auth_core",
+            "label":      "auth",
+            "confidence": 0.83,
+            "searched_nodes": 47    // searched 47 nodes instead of 1240 — 96% reduction
+        },
+        "seed_count":    3,
+        "total_walked":  18,
+        "results": [
             {
-                "entity": "func_register_user",
-                "file": "src/auth/register.ts",
-                "matched_on": "name",
-                "docstring": "Creates a new user account and sends verification email.",
-                "tags": ["auth", "registration"],
-                "bm25_score": 6.10
+                "node_id":        "func_register_user",
+                "node_type":      "Function",
+                "name":           "registerUser",
+                "file":           "src/auth/register.ts",
+                "community_id":   "comm_auth_core",
+                "signature":      "registerUser(email: string, password: string): Promise<User>",
+                "docstring":      "Creates a new user account and sends a verification email.",
+                "tags":           ["auth", "registration"],
+                "final_score":    0.8821,
+                "vector_score":   0.94,
+                "pagerank":       0.031,
+                "heat_score":     42,
+                "is_seed":        true,
+                "reachable_from": ["func_register_user"]
             },
             {
-                "entity": "class_UserService",
-                "file": "src/services/user.ts",
-                "matched_on": "docstring",
-                "docstring": "Manages user CRUD operations including registration and deletion.",
-                "tags": ["user", "service"],
-                "bm25_score": 3.84
+                "node_id":        "class_UserService",
+                "node_type":      "Class",
+                "name":           "UserService",
+                "file":           "src/services/user.ts",
+                "community_id":   "comm_db_models",
+                "signature":      "class UserService",
+                "docstring":      "Manages user CRUD operations including registration.",
+                "tags":           ["user", "service"],
+                "final_score":    0.7340,
+                "vector_score":   0.81,
+                "pagerank":       0.058,
+                "heat_score":     61,
+                "is_seed":        false,
+                "reachable_from": ["func_register_user"]
+            },
+            {
+                "node_id":        "func_send_verification_email",
+                "node_type":      "Function",
+                "name":           "sendVerificationEmail",
+                "file":           "src/notifications/email.ts",
+                "community_id":   "comm_notifications",
+                "signature":      "sendVerificationEmail(userId: string): Promise<void>",
+                "docstring":      "Sends account verification link to new user.",
+                "tags":           ["email", "notifications"],
+                "final_score":    0.6180,
+                "vector_score":   0.71,
+                "pagerank":       0.019,
+                "heat_score":     18,
+                "is_seed":        false,
+                "reachable_from": ["func_register_user"]
             }
+        ],
+        "structural_map": [
+            {"from": "func_register_user",     "to": "class_UserService",          "edge_type": "CALLS_STATIC", "hop": 1, "is_bridge": true,  "bridge": "auth → db"},
+            {"from": "func_register_user",     "to": "func_send_verification_email","edge_type": "CALLS_STATIC", "hop": 1, "is_bridge": true,  "bridge": "auth → notifications"},
+            {"from": "class_UserService",      "to": "func_validate_email_format",  "edge_type": "DEFINES",      "hop": 2, "is_bridge": false}
         ]
     },
     "id": 8
 }
 ```
+
+**`Accept: text/markdown` response** — when the client sends `Accept: text/markdown`, the server assembles `LocateResponse` into a structured Markdown document for direct agent consumption:
+
+````
+// smp/locate response — Accept: text/markdown
+
+## Results for: "user registration"
+_3 seeds · 24 nodes walked · top 3 shown_
+
+---
+
+### 1. `registerUser` · Function · score 0.8821 ★ seed
+**File:** `src/auth/register.ts`
+**Signature:** `registerUser(email: string, password: string): Promise<User>`
+**Docstring:** Creates a new user account and sends a verification email.
+**Tags:** `auth` `registration`
+| vector | pagerank | heat |
+|--------|----------|------|
+| 0.94   | 0.031    | 42   |
+
+---
+
+### 2. `UserService` · Class · score 0.7340
+**File:** `src/services/user.ts`
+**Docstring:** Manages user CRUD operations including registration.
+**Reachable from:** `registerUser`
+
+---
+
+### 3. `sendVerificationEmail` · Function · score 0.6180
+**File:** `src/notifications/email.ts`
+**Signature:** `sendVerificationEmail(userId: string): Promise<void>`
+**Reachable from:** `registerUser`
+
+---
+
+## Structural Map
+
+```
+registerUser
+  ├─[CALLS_STATIC]──▶ UserService
+  └─[CALLS_STATIC]──▶ sendVerificationEmail
+                           └─[DEFINES]──▶ validateEmailFormat
+```
+````
 
 ---
 
@@ -2506,11 +3392,6 @@ Called after peer review passes, or directly if no reviewer agent is configured.
         "test_summary": {
             "coverage_delta_pct":  +14,
             "mutation_score":       1.0
-        },
-        "human_risk_briefing": {
-            "level": "High",
-            "summary": "Agent modified `authenticateUser` (a Hot Node with 12 callers). Structural diff shows signature is unchanged. eBPF runtime trace confirmed tests covered all new branches. Mutation score is 1.0 (no gamification detected). Safe to merge.",
-            "requires_manual_review": ["src/middleware/rateLimit.ts - Network egress attempted to Redis"]
         }
     },
     "id": 106
@@ -2560,12 +3441,15 @@ Called after peer review passes, or directly if no reviewer agent is configured.
 | Component | Technology | Why |
 |-----------|------------|-----|
 | **Parser** | Tree-sitter | Multi-language, incremental, fast |
-| **Graph DB** | Neo4j / Memgraph | Native graph queries, BM25 full-text index, persists sessions + telemetry + CALLS_RUNTIME |
+| **Graph DB** | Neo4j / Memgraph | Native graph queries, BM25 full-text index, GDS PageRank, persists sessions + telemetry + CALLS_RUNTIME |
 | **Graph DB (lightweight)** | SQLite + recursive CTEs | Single-machine or embedded use |
+| **Vector Index** | ChromaDB | code_embedding per node — seed discovery for smp/locate only |
+| **Merkle Index** | SHA-256 tree (built in-process) | O(log n) incremental sync — no full re-index; enables secure index distribution |
 | **Sandbox Runtime** | Docker / Firecracker microVMs | Ephemeral, CoW filesystem, hard egress firewall |
 | **Container Topology** | Testcontainers | Spin up local Postgres, Redis, etc. per sandbox |
 | **Runtime Tracing** | eBPF daemon (BCC / libbpf) | Kernel-level call capture — zero app instrumentation needed |
 | **Mutation Testing** | Stryker (JS/TS) / mutmut (Python) | Deterministic, no LLM, kills tautological tests |
+| **Data Models** | msgspec | Zero-copy, schema-validated structs for internal data flow |
 | **Protocol** | JSON-RPC 2.0 | Standard, simple, MCP-compatible |
 | **Language** | Python (prototype) → Rust (production) | Start fast, optimize later |
 
@@ -2584,11 +3468,16 @@ structural-memory/
 │   │   ├── linker.py            # Static namespaced CALLS resolution
 │   │   ├── linker_runtime.py    # eBPF trace ingestion → CALLS_RUNTIME edges
 │   │   ├── enricher.py          # Static metadata extraction
+│   │   ├── merkle.py            # Merkle tree builder + hash comparator + smp/sync logic
+│   │   ├── index_distributor.py # smp/index/export + import + signature verification
+│   │   ├── community.py         # Louvain detection + centroid computation + MEMBER_OF writes
 │   │   ├── telemetry.py         # Hot node tracking + heat scores
-│   │   └── store.py             # Graph DB interface + full-text index setup
+│   │   ├── store.py             # Graph DB interface + full-text index + PageRank setup
+│   │   └── chroma_index.py      # ChromaDB collection management + code_embedding writes
 │   ├── engine/
 │   │   ├── navigator.py         # Graph traversal (navigate, trace, flow, why)
 │   │   ├── reasoner.py          # Proactive context + summary computation
+│   │   ├── seed_walk.py         # SeedWalkEngine: Seed & Walk pipeline for smp/locate
 │   │   └── guard.py             # Guard checks, dry run, test-gap analysis
 │   ├── sandbox/
 │   │   ├── spawner.py           # Docker / Firecracker microVM lifecycle
@@ -2599,7 +3488,9 @@ structural-memory/
 │   ├── protocol/
 │   │   ├── dispatcher.py        # @rpc_method decorator + method registry
 │   │   └── handlers/
-│   │       ├── memory.py        # smp/update, batch_update, reindex
+│   │       ├── memory.py        # smp/update, batch_update, sync, merkle/tree
+│   │       ├── index.py         # smp/index/export, import
+│   │       ├── community.py     # smp/community/detect, list, get
 │   │       ├── query.py         # smp/navigate, trace, context, impact, locate, flow, diff, why
 │   │       ├── enrichment.py    # smp/enrich, annotate, tag, search
 │   │       ├── safety.py        # smp/session/*, guard/check, dryrun, checkpoint, lock, audit
@@ -2656,85 +3547,52 @@ def handle_trace(params, ctx):
 
 ## Part 9: Agent Integration Example
 
-### Agent Workflow with SMP (Sandbox + MVCC)
+### Agent Workflow with SMP
 
 ```python
-class AutonomousCodingAgent:
+class CodingAgent:
     def __init__(self, smp_client):
         self.smp = smp_client
     
-    def complete_task(self, file_path, instruction):
-        # 1. Open an MVCC session against the current branch head
+    def edit_file(self, file_path, instruction):
+        # 1. Open a session — declare scope upfront
         session = self.smp.call("smp/session/open", {
             "agent_id": self.agent_id,
             "task": instruction,
             "scope": [file_path],
-            "mode": "write",
-            "concurrency": "mvcc"
-        })
-        session_id = session["session_id"]
-
-        # 2. Get structural context & required services
-        context = self.smp.call("smp/context", {"file_path": file_path, "scope": "edit"})
-        services = context["summary"].get("required_services", [])
-
-        # 3. Spawn isolated Sandbox with Testcontainers
-        sandbox = self.smp.call("smp/sandbox/spawn", {
-            "session_id": session_id,
-            "image": "node:20-alpine",
-            "services": services,
-            "inject_ebpf": True
-        })
-        box_id = sandbox["sandbox_id"]
-
-        # 4. Agent writes code (LLM generation happens here)
-        new_code = self._generate_code(instruction, context)
-        test_code = self._generate_tests(instruction, context)
-
-        # 5. Sync edits to the Memory Server AND Sandbox CoW filesystem
-        self.smp.call("smp/update", {"file_path": file_path, "content": new_code})
-        self.smp.call("smp/update", {"file_path": f"tests/{file_path}", "content": test_code})
-
-        # 6. Execution & Self-Correction Loop
-        max_retries = 3
-        for attempt in range(max_retries):
-            exec_result = self.smp.call("smp/sandbox/execute", {
-                "sandbox_id": box_id,
-                "command": "npm run test:local"
-            })
-            
-            if exec_result["exit_code"] == 0:
-                break # Tests passed!
-                
-            if "network_blocks" in exec_result:
-                # Agent self-corrects: writes a local mock for the blocked API
-                self._mock_external_dependency(exec_result["network_blocks"])
-            else:
-                # Agent self-corrects based on stderr
-                self._fix_code_based_on_stderr(exec_result["stderr"])
-
-        # 7. Final Integrity Verification (AST Data-flow + Mutation)
-        verify = self.smp.call("smp/verify/integrity", {
-            "sandbox_id": box_id,
-            "target_file": file_path,
-            "test_file": f"tests/{file_path}"
+            "mode": "write"
         })
 
-        if verify["status"] == "failed":
-            if verify["failure_code"] == "SURVIVING_MUTANT":
-                self._tighten_assertions(verify["survivors"])
-            raise AbortError("Failed to satisfy integrity gate.")
-
-        # 8. Handoff: Package verified sandbox into a Pull Request
-        self.smp.call("smp/handoff/pr", {
-            "sandbox_id": box_id,
-            "session_id": session_id,
-            "title": f"Agent auto-fix: {instruction}",
-            "include": {"structural_diff": True, "runtime_edges": True}
+        # 2. Pre-flight guard check
+        guard = self.smp.call("smp/guard/check", {
+            "session_id": session["session_id"],
+            "target": file_path
         })
-        
-        # 9. Clean up
-        self.smp.call("smp/session/close", {"session_id": session_id, "status": "completed"})
+        if guard["verdict"] == "blocked":
+            raise AbortError(guard["reasons"])
+
+        # 3. Get full structural context
+        context = self.smp.call("smp/context", {
+            "file_path": file_path,
+            "scope": "edit"
+        })
+
+        # 4. Dry run the proposed change
+        dryrun = self.smp.call("smp/dryrun", {
+            "session_id": session["session_id"],
+            "file_path": file_path,
+            "proposed_content": new_code,
+        })
+        if dryrun["verdict"] == "breaking":
+            raise AbortError(dryrun["risks"])
+
+        # 5. Checkpoint, write, sync memory
+        self.smp.call("smp/checkpoint", {"session_id": session["session_id"], "files": [file_path]})
+        write_to_disk(file_path, new_code)
+        self.smp.call("smp/update", {"file_path": file_path, "content": new_code, "change_type": "modified"})
+
+        # 6. Close session
+        self.smp.call("smp/session/close", {"session_id": session["session_id"], "status": "completed"})
 ```
 
 ---
@@ -2747,12 +3605,16 @@ class AutonomousCodingAgent:
 | **Graph Builder** | Create structural relationships |
 | **Static Linker** | Namespace-aware cross-file CALLS resolution — no ambiguous edges |
 | **Runtime Linker** | eBPF execution traces → `CALLS_RUNTIME` edges — resolves DI and metaprogramming |
-| **Enricher** | Attach static metadata — docstrings, annotations, tags |
-| **Memory Store** | Graph DB — structure, `CALLS_STATIC`, `CALLS_RUNTIME`, sessions, telemetry, BM25 index |
+| **Enricher** | Attach static metadata — docstrings, annotations, tags, code_embedding |
+| **Graph DB** | Neo4j — structure, `CALLS_STATIC`, `CALLS_RUNTIME`, PageRank, sessions, telemetry, BM25 index |
+| **Vector Index** | ChromaDB — `code_embedding` per node for Seed phase of `smp/locate` |
+| **Merkle Index** | SHA-256 tree over all file nodes — O(log n) incremental sync, powers `smp/sync` + secure index distribution |
+| **SeedWalkEngine** | `smp/locate` pipeline: Vector seed → Cypher N-hop walk → composite rank → structural_map |
 | **Query Engine** | navigate, trace, context (+summary), impact, locate, flow, diff, plan, conflict, why |
 | **SMP Protocol** | JSON-RPC 2.0 via Dispatcher — handlers split by domain, no god file |
 | **Agent Safety** | Sessions (persisted, MVCC or exclusive), guard checks, dry runs, checkpoints, audit log |
 | **Telemetry** | Hot node tracking, heat scores, automatic safety escalation |
+| **Community Detection** | Two-level Louvain (coarse + fine) — powers Graph RAG routing, `smp/community/boundaries` for architecture agents |
 | **Sandbox Runtime** | Ephemeral microVM/Docker, CoW filesystem, hard egress firewall, eBPF trace capture |
 | **Integrity Gate** | AST data-flow check + deterministic mutation testing — anti-gamification, no LLM |
 | **Swarm Handoff** | Peer review pass-off + structured PR with structural diff, runtime edges, mutation score |

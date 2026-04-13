@@ -12,8 +12,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from smp.core.models import RuntimeEdge, RuntimeTrace
+from smp.core.models import EdgeType, GraphEdge, RuntimeEdge, RuntimeTrace
 from smp.logging import get_logger
+from smp.store.interfaces import GraphStore
 
 log = get_logger(__name__)
 
@@ -179,3 +180,33 @@ class RuntimeLinker:
         self._session_traces.clear()
         self._call_counts.clear()
         log.info("runtime_linker_cleared")
+
+    async def inject_runtime_edges(self, graph_store: GraphStore) -> int:
+        """Inject recorded runtime calls as edges into the graph store.
+
+        Args:
+            graph_store: The graph store to update.
+
+        Returns:
+            Number of edges injected.
+        """
+        edges_to_inject: list[GraphEdge] = []
+
+        for call in self._calls:
+            edge = GraphEdge(
+                source_id=call.source_id,
+                target_id=call.target_id,
+                type=EdgeType.CALLS_RUNTIME,
+                metadata={
+                    "timestamp": call.timestamp,
+                    "session_id": call.session_id,
+                    "duration_ms": str(call.duration_ms),
+                },
+            )
+            edges_to_inject.append(edge)
+
+        if edges_to_inject:
+            await graph_store.upsert_edges(edges_to_inject)
+
+        log.info("runtime_edges_injected", count=len(edges_to_inject))
+        return len(edges_to_inject)

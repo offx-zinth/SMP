@@ -6,11 +6,13 @@ analyzing data flow through the AST and detecting mutations.
 
 from __future__ import annotations
 
+import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
 from smp.logging import get_logger
+from smp.store.interfaces import GraphStore
 
 log = get_logger(__name__)
 
@@ -153,3 +155,88 @@ class IntegrityVerifier:
             "affected_nodes": len(by_node),
             "by_node": by_node,
         }
+
+    async def run_mutation_test(
+        self,
+        node_id: str,
+        graph_store: GraphStore,
+    ) -> IntegrityCheckResult:
+        """Run mutation testing on a specific node.
+
+        Mutates operators in the source code and checks if tests still pass.
+        """
+        node = await graph_store.get_node(node_id)
+        if not node:
+            log.error("mutation_test_failed", reason="node_not_found", node_id=node_id)
+            return IntegrityCheckResult(passed=False, node_id=node_id, checks_run=0)
+
+        file_path = node.file_path
+        try:
+            with open(file_path) as f:
+                lines = f.readlines()
+        except OSError as e:
+            log.error("mutation_test_failed", reason="file_read_error", error=str(e))
+            return IntegrityCheckResult(passed=False, node_id=node_id, checks_run=0)
+
+        mutants_survived = 0
+        checks_run = 0
+        detected_mutations: list[MutationRecord] = []
+
+        # Simple operator flips
+        operators = {"==": "!=", "!=": "==", ">": "<=", "<": ">=", ">=": "<=", "<=": ">"}
+
+        start = max(0, node.structural.start_line - 1)
+        end = min(len(lines), node.structural.end_line)
+
+        for i in range(start, end):
+            line = lines[i]
+            for op, replacement in operators.items():
+                if op in line:
+                    checks_run += 1
+                    original_line = line
+                    lines[i] = line.replace(op, replacement, 1)
+
+                    try:
+                        with open(file_path, "w") as f:
+                            f.writelines(lines)
+
+                        # Run tests
+                        result = subprocess.run(["pytest"], capture_output=True, text=True, timeout=30)
+
+                        if result.returncode == 0:
+                            mutants_survived += 1
+                            mutation = MutationRecord(
+                                node_id=node_id,
+                                mutation_type="operator_flip",
+                                field_name=f"line_{i + 1}",
+                                old_value=op,
+                                new_value=replacement,
+                                detected_at=datetime.now(UTC).isoformat(),
+                            )
+                            detected_mutations.append(mutation)
+                            self._mutations.append(mutation)
+
+                    except (subprocess.TimeoutExpired, OSError) as e:
+                        log.warning("mutation_test_warning", error=str(e))
+                    finally:
+                        lines[i] = original_line
+                        with open(file_path, "w") as f:
+                            f.writelines(lines)
+
+        passed = mutants_survived == 0
+
+        log.info(
+            "mutation_test_completed",
+            node_id=node_id,
+            passed=passed,
+            survived=mutants_survived,
+            total=checks_run,
+        )
+
+        return IntegrityCheckResult(
+            passed=passed,
+            node_id=node_id,
+            checks_run=checks_run,
+            mutations_detected=detected_mutations,
+            warnings=[f"{mutants_survived} mutants survived"] if mutants_survived > 0 else [],
+        )
