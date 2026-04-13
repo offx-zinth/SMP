@@ -5,6 +5,13 @@ Start with: ``python3.11 -m smp.cli serve``
 
 from __future__ import annotations
 
+try:
+    import pysqlite3
+    import sys
+    sys.modules["sqlite3"] = pysqlite3
+except ImportError:
+    pass
+
 import os
 from contextlib import asynccontextmanager
 from typing import Any
@@ -14,11 +21,14 @@ from fastapi.responses import Response
 
 from smp.engine.enricher import StaticSemanticEnricher
 from smp.engine.graph_builder import DefaultGraphBuilder
-from smp.engine.query import DefaultQueryEngine
+from smp.engine.seed_walk import SeedWalkEngine
+from smp.engine.community import CommunityDetector
+from smp.core.merkle import MerkleIndex
 from smp.logging import get_logger
 from smp.parser.registry import ParserRegistry
 from smp.protocol.dispatcher import handle_rpc
 from smp.store.graph.neo4j_store import Neo4jGraphStore
+from smp.store.chroma_store import ChromaVectorStore
 
 log = get_logger(__name__)
 
@@ -40,11 +50,15 @@ def create_app(
         graph = Neo4jGraphStore(uri=uri, user=user, password=password)
         await graph.connect()
 
-        # V2: Uses Neo4j full-text index, no vector store
+        vector = ChromaVectorStore()
+        await vector.connect()
+
         enricher = StaticSemanticEnricher()
-        engine = DefaultQueryEngine(graph, None, enricher)
+        community_detector = CommunityDetector(graph_store=graph, vector_store=vector)
+        engine = SeedWalkEngine(graph_store=graph, vector_store=vector, enricher=enricher)
         builder = DefaultGraphBuilder(graph)
         registry = ParserRegistry()
+        merkle_index = MerkleIndex()
 
         safety: dict[str, Any] | None = None
         if safety_enabled:
@@ -90,7 +104,10 @@ def create_app(
             }
 
         app.state.graph = graph
+        app.state.vector = vector
         app.state.engine = engine
+        app.state.community_detector = community_detector
+        app.state.merkle_index = merkle_index
         app.state.builder = builder
         app.state.enricher = enricher
         app.state.registry = registry

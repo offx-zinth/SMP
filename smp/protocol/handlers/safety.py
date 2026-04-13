@@ -17,6 +17,7 @@ from smp.core.models import (
     SessionOpenParams,
     SessionRecoverParams,
 )
+from smp.engine.integrity import IntegrityCheckResult, IntegrityVerifier
 from smp.logging import get_logger
 from smp.protocol.handlers.base import MethodHandler
 
@@ -254,3 +255,84 @@ class AuditGetHandler(MethodHandler):
             raise ValueError(f"Audit log not found: {agp.audit_log_id or params.get('session_id')}")
 
         return audit
+
+
+class IntegrityVerifyHandler(MethodHandler):
+    """Handles smp/verify/integrity method."""
+
+    @property
+    def method(self) -> str:
+        return "smp/verify/integrity"
+
+    async def handle(
+        self,
+        params: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        session_id: str = params["session_id"]
+        node_ids: list[str] = params.get("node_ids") or []
+        mode: str = params.get("mode", "ast")
+        if mode not in ("ast", "mutation", "both"):
+            raise ValueError(f"Invalid mode: {mode}. Must be 'ast', 'mutation', or 'both'")
+
+        integrity_verifier: IntegrityVerifier | None = context.get("integrity_verifier")
+        if not integrity_verifier:
+            integrity_verifier = IntegrityVerifier()
+
+        graph_store = context.get("engine")
+        all_mutations: list[dict[str, Any]] = []
+        all_warnings: list[str] = []
+        total_checks = 0
+        all_passed = True
+
+        target_ids = node_ids if node_ids else list(integrity_verifier._baselines.keys())
+
+        for nid in target_ids:
+            results: list[IntegrityCheckResult] = []
+
+            if mode in ("ast", "both"):
+                baseline = integrity_verifier._baselines.get(nid)
+                current_state = baseline["state"] if baseline else {}
+                ast_result = await integrity_verifier.verify(nid, current_state)
+                results.append(ast_result)
+
+            if mode in ("mutation", "both"):
+                if not graph_store:
+                    all_warnings.append(f"Graph store unavailable for mutation test on {nid}")
+                    continue
+                mutation_result = await integrity_verifier.run_mutation_test(nid, graph_store)
+                results.append(mutation_result)
+
+            for r in results:
+                if not r.passed:
+                    all_passed = False
+                total_checks += r.checks_run
+                all_mutations.extend(
+                    [
+                        {
+                            "node_id": m.node_id,
+                            "mutation_type": m.mutation_type,
+                            "field_name": m.field_name,
+                            "old_value": m.old_value,
+                            "new_value": m.new_value,
+                            "detected_at": m.detected_at,
+                        }
+                        for m in r.mutations_detected
+                    ]
+                )
+                all_warnings.extend(r.warnings)
+
+        log.info(
+            "integrity_verify",
+            session_id=session_id,
+            mode=mode,
+            passed=all_passed,
+            checks_run=total_checks,
+        )
+
+        return {
+            "passed": all_passed,
+            "mutations_detected": all_mutations,
+            "warnings": all_warnings,
+            "checks_run": total_checks,
+        }

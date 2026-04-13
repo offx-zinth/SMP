@@ -102,6 +102,7 @@ class SemanticProperties(msgspec.Struct):
     decorators: list[str] = msgspec.field(default_factory=list)
     annotations: Annotations | None = None
     tags: list[str] = msgspec.field(default_factory=list)
+    score: float = 0.0
     manually_set: bool = False
     source_hash: str = ""
     enriched_at: str = ""
@@ -580,8 +581,53 @@ class SandboxKillParams(msgspec.Struct):
 
 
 # ---------------------------------------------------------------------------
-# SMP(3) Integrity Models
+# Community params
 # ---------------------------------------------------------------------------
+
+
+class CommunityDetectParams(msgspec.Struct):
+    """Parameters for smp/community/detect."""
+
+    resolutions: list[dict[str, Any]] = msgspec.field(default_factory=list)
+    relationship_types: list[str] = msgspec.field(default_factory=list)
+
+
+class CommunityListParams(msgspec.Struct):
+    """Parameters for smp/community/list."""
+
+    level: int | None = None
+
+
+class CommunityGetParams(msgspec.Struct):
+    """Parameters for smp/community/get."""
+
+    community_id: str
+    node_types: list[str] = msgspec.field(default_factory=list)
+    include_bridges: bool = False
+
+
+class CommunityBoundariesParams(msgspec.Struct):
+    """Parameters for smp/community/boundaries."""
+
+    level: int = 0
+    min_coupling: float = 0.05
+
+
+# ---------------------------------------------------------------------------
+# Merkle params
+# ---------------------------------------------------------------------------
+
+
+class MerkleSyncParams(msgspec.Struct):
+    """Parameters for smp/sync."""
+
+    remote_data: dict[str, Any] = msgspec.field(default_factory=dict)
+
+
+class MerkleImportParams(msgspec.Struct):
+    """Parameters for smp/index/import."""
+
+    data: dict[str, Any] = msgspec.field(default_factory=dict)
 
 
 class IntegrityCheckParams(msgspec.Struct):

@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 
 from smp.logging import configure_logging, get_logger
 
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 log = get_logger(__name__)
 

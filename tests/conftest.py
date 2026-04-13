@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from smp.core.models import (
@@ -14,6 +16,16 @@ from smp.core.models import (
 )
 from smp.store.graph.neo4j_store import Neo4jGraphStore
 
+# Load environment from .env if not already set
+if "SMP_NEO4J_URI" not in os.environ:
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+    except ImportError:
+        pass
+
+
 # ---------------------------------------------------------------------------
 # Neo4j fixtures
 # ---------------------------------------------------------------------------
@@ -22,7 +34,10 @@ from smp.store.graph.neo4j_store import Neo4jGraphStore
 @pytest.fixture(scope="session")
 def neo4j_store() -> Neo4jGraphStore:
     """Provide a connected Neo4j graph store (session-scoped)."""
-    store = Neo4jGraphStore()
+    uri = os.environ.get("SMP_NEO4J_URI", "bolt://localhost:7687")
+    user = os.environ.get("SMP_NEO4J_USER", "neo4j")
+    password = os.environ.get("SMP_NEO4J_PASSWORD", "")
+    store = Neo4jGraphStore(uri=uri, user=user, password=password)
     return store
 
 

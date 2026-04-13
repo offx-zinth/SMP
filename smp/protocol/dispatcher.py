@@ -23,16 +23,32 @@ from smp.protocol.handlers.annotation import (
     TagHandler,
 )
 from smp.protocol.handlers.base import MethodHandler
+from smp.protocol.handlers.community import (
+    CommunityBoundariesHandler,
+    CommunityDetectHandler,
+    CommunityGetHandler,
+    CommunityListHandler,
+)
 from smp.protocol.handlers.enrichment import (
     EnrichBatchHandler,
     EnrichHandler,
     EnrichStaleHandler,
     EnrichStatusHandler,
 )
+from smp.protocol.handlers.handoff import (
+    HandoffPRHandler,
+    HandoffReviewHandler,
+)
 from smp.protocol.handlers.memory import (
     BatchUpdateHandler,
     ReindexHandler,
     UpdateHandler,
+)
+from smp.protocol.handlers.merkle import (
+    IndexExportHandler,
+    IndexImportHandler,
+    MerkleTreeHandler,
+    SyncHandler,
 )
 from smp.protocol.handlers.query import (
     ContextHandler,
@@ -54,6 +70,7 @@ from smp.protocol.handlers.safety import (
     CheckpointHandler,
     DryRunHandler,
     GuardCheckHandler,
+    IntegrityVerifyHandler,
     LockHandler,
     RollbackHandler,
     SessionCloseHandler,
@@ -118,6 +135,7 @@ class RpcDispatcher:
             LockHandler,
             UnlockHandler,
             AuditGetHandler,
+            IntegrityVerifyHandler,
             NavigateHandler,
             TraceHandler,
             ContextHandler,
@@ -136,6 +154,16 @@ class RpcDispatcher:
             SandboxSpawnHandler,
             SandboxExecuteHandler,
             SandboxDestroyHandler,
+            CommunityDetectHandler,
+            CommunityListHandler,
+            CommunityGetHandler,
+            CommunityBoundariesHandler,
+            SyncHandler,
+            MerkleTreeHandler,
+            IndexExportHandler,
+            IndexImportHandler,
+            HandoffReviewHandler,
+            HandoffPRHandler,
         ]:
             handler = handler_cls()
             self._handlers[handler.method] = handler
