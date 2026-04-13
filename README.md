@@ -48,6 +48,11 @@ cp .env.example .env
 
 ### 3. Install & Run
 ```bash
+# Clone and enter the repo
+git clone https://github.com/offx-zinth/smp.git
+cd smp
+
+# Create venv with Python 3.11
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
