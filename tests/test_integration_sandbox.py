@@ -10,6 +10,7 @@ import pytest
 
 try:
     from smp.sandbox.docker_sandbox import DockerSandbox
+
     DOCKER_AVAILABLE = True
 except ImportError:
     DOCKER_AVAILABLE = False

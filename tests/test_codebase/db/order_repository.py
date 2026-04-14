@@ -5,6 +5,7 @@ from .base_repository import BaseRepository
 
 class Order:
     """Represents an order entity."""
+
     def __init__(self, order_id: str, user_id: str, amount: float):
         self.order_id = order_id
         self.user_id = user_id
