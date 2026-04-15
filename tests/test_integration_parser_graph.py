@@ -43,9 +43,7 @@ class TestParserRegistryIntegration:
         classes = [n for n in doc.nodes if n.type == NodeType.CLASS]
         imports = [n for n in doc.nodes if n.type == NodeType.FILE and "import" in n.structural.signature]
 
-        assert len(functions) >= 4, (
-            f"Expected 4+ functions, got {len(functions)}: {[f.structural.name for f in functions]}"
-        )
+        assert len(functions) >= 4, f"Expected 4+ functions, got {len(functions)}: {[f.structural.name for f in functions]}"
         assert len(classes) >= 1, f"Expected 1+ classes, got {len(classes)}"
         assert len(imports) >= 3, f"Expected 3+ imports, got {len(imports)}"
 
@@ -74,9 +72,7 @@ class TestParserRegistryIntegration:
         functions = [n for n in doc.nodes if n.type == NodeType.FUNCTION]
         imports = [n for n in doc.nodes if n.type == NodeType.FILE and "import" in n.structural.signature]
 
-        assert len(functions) >= 3, (
-            f"Expected 3+ functions, got {len(functions)}: {[f.structural.name for f in functions]}"
-        )
+        assert len(functions) >= 3, f"Expected 3+ functions, got {len(functions)}: {[f.structural.name for f in functions]}"
         assert len(imports) >= 2, f"Expected 2+ imports, got {len(imports)}"
 
     @pytest.mark.asyncio
@@ -129,15 +125,7 @@ class TestGraphBuilderIntegration:
         stored_nodes = await store.find_nodes()
         node_names = {n.structural.name for n in stored_nodes}
 
-        expected_functions = [
-            "hash_password",
-            "verify_password",
-            "generate_token",
-            "login",
-            "logout",
-            "verify_token",
-            "get_current_user",
-        ]
+        expected_functions = ["hash_password", "verify_password", "generate_token", "login", "logout", "verify_token", "get_current_user"]
         expected_classes = ["AuthService"]
 
         for func_name in expected_functions:
@@ -150,9 +138,7 @@ class TestGraphBuilderIntegration:
         edge_types = {e.type for e in edges}
 
         assert EdgeType.DEFINES in edge_types, f"Missing DEFINES edges. Types found: {edge_types}"
-        assert EdgeType.CALLS in edge_types or EdgeType.DEFINES in edge_types, (
-            f"Missing relationship edges. Types found: {edge_types}"
-        )
+        assert EdgeType.CALLS in edge_types or EdgeType.DEFINES in edge_types, f"Missing relationship edges. Types found: {edge_types}"
 
     @pytest.mark.asyncio
     async def test_ingest_db_models(
@@ -221,9 +207,7 @@ class TestGraphBuilderIntegration:
         assert NodeType.CLASS in node_types, f"No classes found. Types: {node_types}"
 
         assert EdgeType.DEFINES in edge_types, f"No DEFINES edges. Types: {edge_types}"
-        assert EdgeType.CALLS in edge_types or EdgeType.IMPORTS in edge_types, (
-            f"No CALLS or IMPORTS edges. Types: {edge_types}"
-        )
+        assert EdgeType.CALLS in edge_types or EdgeType.IMPORTS in edge_types, f"No CALLS or IMPORTS edges. Types: {edge_types}"
 
 
 class TestEdgeCreation:
@@ -305,6 +289,4 @@ class TestEdgeCreation:
         defines_edges = [e for e in edges if e.type == EdgeType.DEFINES]
 
         auth_service_defines = [e for e in defines_edges if "AuthService" in e.source_id]
-        assert len(auth_service_defines) >= 3, (
-            f"Expected 3+ AuthService method defines, got {len(auth_service_defines)}"
-        )
+        assert len(auth_service_defines) >= 3, f"Expected 3+ AuthService method defines, got {len(auth_service_defines)}"

@@ -2,23 +2,29 @@
 
 **High-Fidelity Codebase Intelligence for AI Agents**
 
----
+Structural Memory Protocol (SMP) is a graph-based memory system that provides AI agents with a deep, structured understanding of complex codebases. Unlike RAG which treats code as flat text, SMP models code as a multi-dimensional graph of entities, relationships, and semantic meanings.
 
-SMP (Structural Memory Protocol) is a graph-based memory system that provides AI agents with a deep, structured understanding of complex codebases. Unlike RAG which treats code as flat text, SMP models code as a multi-dimensional graph of entities, relationships, and semantic meanings.
-
-**Version:** 1.3.0 | **Stack:** Python 3.11+, FastAPI, Neo4j, ChromaDB
+Built with **Python 3.11**, **FastAPI**, and **Neo4j**, SMP enables agents to perform precise code navigation, impact analysis, and safe refactoring — using static analysis (no LLM required).
 
 ---
 
 ## Quickstart (Docker Compose)
 
+The fastest way to get SMP running:
+
 ```bash
-git clone https://github.com/offx-zinth/smp.git
+# Clone the repository
+git clone https://github.com/your-org/smp.git
 cd smp
+
+# Copy and configure environment
 cp .env.example .env
 # Edit .env with your Neo4j password
 
+# Start all services
 docker compose up -d
+
+# Verify health
 curl http://localhost:8420/health
 # Returns: {"status":"ok"}
 ```
@@ -30,7 +36,6 @@ curl http://localhost:8420/health
 ### 1. Requirements
 - **Python 3.11+**
 - **Neo4j 5.x** (Local or AuraDB)
-- **uv** (recommended) or pip
 
 ### 2. Environment
 ```bash
@@ -43,14 +48,13 @@ cp .env.example .env
 
 ### 3. Install & Run
 ```bash
+# Clone and enter the repo
 git clone https://github.com/offx-zinth/smp.git
 cd smp
 
 # Create venv with Python 3.11
 python3.11 -m venv .venv
 source .venv/bin/activate
-
-# Install with dev dependencies
 pip install -e ".[dev]"
 
 # Start the server
@@ -59,168 +63,21 @@ smp serve
 
 ---
 
-## Architecture Overview
+## Architecture: Manual Efficient Method (SMP V2)
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     CODEBASE (Files + Git)                      │
-└──────────────────────────┬──────────────────────────────────────┘
-                           │ Updates (Watch / Agent Push / commit_sha)
-                           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   MEMORY SERVER (SMP Core)                      │
-│  ┌─────────────┐   ┌──────────────┐   ┌─────────────┐           │
-│  │   PARSER    │──▶│ GRAPH BUILDER│──▶│  ENRICHER   │           │
-│  │ (AST/Tree-  │   │ + LINKER     │   │ (Static     │           │
-│  │  sitter)    │   │ (Static +    │   │  Metadata)  │           │
-│  │             │   │  eBPF Runtime│   │             │           │
-│  └─────────────┘   └──────────────┘   └──────┬──────┘           │
-│                                              │                  │
-│  ┌───────────────────────────────────────────▼──────────────┐   │
-│  │                    MEMORY STORE                          │   │
-│  │                                                          │   │
-│  │  ┌─────────────────────────────────────┐                 │   │
-│  │  │  GRAPH DB (Neo4j)                   │                 │   │
-│  │  │  Structure · CALLS_STATIC           │                 │   │
-│  │  │  CALLS_RUNTIME · PageRank           │                 │   │
-│  │  │  Sessions · Audit · Telemetry       │                 │   │
-│  │  │  Full-Text Index (BM25)             │                 │   │
-│  │  └─────────────────────────────────────┘                 │   │
-│  │                                                          │   │
-│  │  ┌─────────────────────────────────────┐                 │   │
-│  │  │  VECTOR INDEX (ChromaDB)            │                 │   │
-│  │  │  code_embedding per node            │                 │   │
-│  │  │  community centroid embeddings      │                 │   │
-│  │  └─────────────────────────────────────┘                 │   │
-│  │                                                          │   │
-│  │  ┌─────────────────────────────────────┐                 │   │
-│  │  │  MERKLE INDEX                       │                 │   │
-│  │  │  SHA-256 leaf per file node         │                 │   │
-│  │  │  O(log n) sync & diff               │                 │   │
-│  │  └─────────────────────────────────────┘                 │   │
-│  └──────────────────────┬───────────────────────────────────┘   │
-└─────────────────────────┼───────────────────────────────────────┘
-                          │
-       ┌───────────────────────┬───────────────┐
-       │                       │               │
-       ▼                       ▼               ▼
-┌─────────────────┐   ┌──────────────────────┐   ┌───────────────┐
-│  QUERY ENGINE   │   │   SANDBOX RUNTIME    │   │  SWARM LAYER  │
-│  Navigator      │   │  Ephemeral microVM/  │   │  Peer Review  │
-│  Reasoner       │   │  Docker + CoW fork   │   │  PR Handoff   │
-│  SeedWalkEngine │   │  eBPF trace capture  │   │               │
-│  Telemetry      │   │  Egress-firewalled   │   └───────┬───────┘
-│  Community      │   │  Mutation Testing    │           │
-└────────┬────────┘   └──────────┬───────────┘           │
-         └──────────────┬────────┘               ────────┘
-                        │ SMP Protocol (Dispatcher)
-                        ▼
-        ┌─────────────────────────────────────────────┐
-        │              AGENT LAYER                    │
-        │   Agent A       Agent B       Agent C       │
-        │   (Coder)       (Reviewer)    (Architect)   │
-        └─────────────────────────────────────────────┘
-```
+SMP V2 is designed for production-grade efficiency. It relies on **static AST extraction** and **Neo4j full-text indexing** — no LLM or vector embeddings required.
 
----
-
-## Key Features
-
-### Memory Store
-
-| Component | Technology | Purpose |
-|-----------|-----------|---------|
-| **Graph DB** | Neo4j | Structure, CALLS, IMPORTS, PageRank, Sessions |
-| **Vector Index** | ChromaDB | code_embedding, community centroids |
-| **Merkle Index** | SHA-256 | O(log n) sync, state tracking |
-
-### Query Engine
-
-| Method | Description |
-|--------|------------|
-| `smp/navigate` | Find specific entities |
-| `smp/trace` | Follow relationships |
-| `smp/context` | Get relevant context (with role classification) |
-| `smp/impact` | Assess change impact |
-| `smp/locate` | SeedWalkEngine - Community-routed graph RAG |
-| `smp/search` | BM25 full-text search |
-| `smp/flow` | Trace data/logic path |
-
-### Community Detection
-
-- **Louvain Algorithm** at two resolutions (L0: coarse, L1: fine)
-- **Centroid embeddings** for Phase 0 routing
-- **Bridge detection** for cross-community coupling
-
-### Agent Safety Protocol
-
-| Method | Description |
-|--------|------------|
-| `smp/session/open` | Open agent session |
-| `smp/session/close` | Close and persist |
-| `smp/session/recover` | Resume session |
-| `smp/lock` | Exclusive file lock |
-| `smp/unlock` | Release lock |
-| `smp/guard/check` | Pre-flight safety |
-| `smp/dryrun` | Simulate changes |
-| `smp/checkpoint` | Snapshot state |
-| `smp/rollback` | Restore checkpoint |
-| `smp/verify/integrity` | Mutation testing |
-| `smp/audit` | Event logging |
-
-### Sandbox Runtime
-
-| Component | Description |
-|-----------|------------|
-| `smp/sandbox/spawn` | Create isolated environment |
-| `smp/sandbox/execute` | Run code in sandbox |
-| `smp/sandbox/destroy` | Cleanup |
-| **DockerSandbox** | Container with CoW filesystem |
-| **EBPFCollector** | Runtime trace capture |
-
-### Swarm Handoff
-
-| Method | Description |
-|--------|------------|
-| `smp/handoff/review` | Create peer review |
-| `smp/handoff/pr` | Generate PR |
-
----
-
-## Integration Tests
-
-The SMP codebase includes comprehensive integration tests covering all major components:
-
-```bash
-# Run all integration tests
-pytest tests/test_integration_*.py -v
-
-# Results: 163 passed, 5 skipped
-```
-
-| Test Suite | Tests | Status |
-|-----------|-------|--------|
-| Query Engine | 34 | ✅ Pass |
-| Agent Safety | 42 | ✅ Pass |
-| Community Detection | 20 | ✅ Pass |
-| Merkle Index | 16 | ✅ Pass |
-| Vector Store | 29 | ✅ Pass |
-| Protocol Handlers | 21 | ✅ Pass |
-| Sandbox (Directory) | 22 | ✅ Pass |
-
-### Tested Components
-
-- **Parser + Graph Builder**: Extracts nodes and creates CALLS/IMPORTS/DEFINES edges
-- **Query Engine**: navigate, trace, locate (SeedWalkEngine), get_context, assess_impact, find_flow
-- **Safety**: Session management, locking, guards, dry runs, checkpoints, audit logging
-- **Community**: Louvain L0/L1 detection, bridge detection, centroid computation
-- **Merkle**: Tree build, hash, diff, sync, export/import
-- **Vector Store**: ChromaDB upsert/query/delete with metadata filtering
-- **Protocol**: All JSON-RPC methods registered and instantiatable
+- **Parser**: Tree-sitter extracts functions, classes, imports, and docstrings directly from AST.
+- **Enricher**: Extracts docstrings, decorators, and type annotations statically.
+- **Linker**: Namespaced cross-file resolution for CALLS edges.
+- **Query Engine**: Neo4j full-text index (BM25) for keyword search.
+- **Safety Protocol**: Session management, dry-runs, and isolated sandbox execution.
 
 ---
 
 ## Demo: JSON-RPC Query
+
+Ingest a codebase and query it:
 
 ```bash
 # Ingest a project
@@ -246,18 +103,30 @@ curl -X POST http://localhost:8420/rpc \
 {
   "jsonrpc": "2.0",
   "result": {
-    "self": {...},
-    "imports": [...],
-    "imported_by": [...],
-    "defines": [...],
-    "entry_points": [...],
-    "data_flow_in": [...],
-    "data_flow_out": [...],
-    "summary": {
-      "role": "core_utility",
-      "blast_radius": 42,
-      "avg_complexity": 3.2,
-      "risk_level": "medium"
+    "self": {
+      "id": "smp/core/models.py::GraphNode",
+      "type": "Class",
+      "name": "GraphNode",
+      "signature": "class GraphNode",
+      "start_line": 130,
+      "end_line": 220
+    },
+    "neighbors": [
+      {
+        "id": "smp/core/models.py::StructuralProperties",
+        "type": "Class",
+        "relationship": "CONTAINS"
+      },
+      {
+        "id": "smp/core/models.py::SemanticProperties",
+        "type": "Class", 
+        "relationship": "CONTAINS"
+      }
+    ],
+    "context": {
+      "file": "smp/core/models.py",
+      "imports": ["msgspec", "typing"],
+      "defines": ["GraphNode", "GraphEdge", "NodeType", "EdgeType"]
     }
   },
   "id": 1
@@ -266,15 +135,57 @@ curl -X POST http://localhost:8420/rpc \
 
 ---
 
-## Python SDK
+## Key Capabilities
 
+* **Graph-Augmented Retrieval:** Navigate via `CALLS`, `INHERITS`, `IMPORTS` relationships
+* **Semantic Search:** Neo4j full-text index (BM25) for keyword search across docstrings/tags
+* **Static Enrichment:** Docstrings, decorators, and type annotations extracted from AST
+* **Impact Assessment:** Determine the "blast radius" before changes
+* **Safety & Sandboxing:** Session management, dry-runs, isolated execution
+* **Multi-Language:** Python and TypeScript/JavaScript via Tree-sitter
+
+---
+
+## Architecture
+
+```
+smp/
+├── smp/
+│   ├── core/            # Models, logging
+│   ├── engine/         # Query, enricher, linker, safety
+│   ├── protocol/      # JSON-RPC 2.0 API
+│   │   └── handlers/  # Modular method handlers
+│   ├── store/         # Neo4j (graph + full-text)
+│   ├── parser/        # Tree-sitter parsing
+│   ├── sandbox/        # Isolated execution
+│   ├── cli.py         # CLI
+│   └── client.py      # Python SDK
+├── tests/             # Test suite
+└── .github/workflows/# CI/CD
+```
+
+---
+
+## Usage
+
+### Ingest a Project
+```bash
+smp ingest /path/to/project --clear
+```
+
+### Run Server
+```bash
+smp serve --port 8420 --safety
+```
+
+### Python SDK
 ```python
 import asyncio
 from smp.client import SMPClient
 
 async def main():
     async with SMPClient("http://localhost:8420") as client:
-        # Graph RAG (SeedWalkEngine)
+        # Semantic search
         results = await client.locate("authentication logic")
         
         # Trace call graph
@@ -302,10 +213,7 @@ ruff check .
 mypy smp/
 
 # Test
-pytest tests/
-
-# Integration tests
-pytest tests/test_integration_*.py
+pytest
 ```
 
 ---
@@ -314,35 +222,19 @@ pytest tests/test_integration_*.py
 
 | Issue | Solution |
 |:---|:---|
-| `sqlite3` ImportError | Install `pysqlite3-binary` (automatically handled) |
+| `sqlite3` ImportError | Install `pysqlite3-binary` |
 | Neo4j Connection | Check `SMP_NEO4J_URI` and credentials in `.env` |
-| ChromaDB errors | Ensure sqlite3 >= 3.35.0 or use pysqlite3 |
-| Docker sandbox | Run with appropriate socket permissions |
+| SyntaxError | Use Python 3.11 |
+| Enrichment Timeout | Set `SMP_ENRICHMENT=none` in `.env` |
 
 ---
 
-## Project Structure
+## Contributing
 
-```
-smp/
-├── smp/
-│   ├── core/            # Models, Merkle index, logging
-│   ├── engine/         # Query, enricher, linker, safety
-│   │               # community, seed_walk, pagerank
-│   ├── protocol/      # JSON-RPC 2.0 API
-│   │   └── handlers/ # Modular method handlers
-│   ├── store/         # Neo4j, ChromaDB interfaces
-│   ├── parser/        # Tree-sitter parsing
-│   ├── sandbox/       # Docker, eBPF collector
-│   ├── cli.py         # CLI
-│   └── client.py      # Python SDK
-├── tests/
-│   ├── fixtures/        # Sample projects
-│   └── test_integration_*.py  # Integration tests
-├── .env.example
-├── pyproject.toml
-└── README.md
-```
+1. Use `feature/` or `fix/` branches
+2. Follow patterns in `AGENTS.md`
+3. Add tests for new features
+4. Run `ruff check . && ruff format . && mypy smp/ && pytest`
 
 ---
 

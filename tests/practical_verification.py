@@ -5,7 +5,6 @@ from smp.logging import get_logger
 
 log = get_logger("verification")
 
-
 async def main():
     async with SMPClient("http://localhost:8420") as client:
         # 1. Ingest Test Codebase
@@ -17,7 +16,7 @@ async def main():
             with open(path, "r") as file:
                 content = file.read()
             await client.update(path, content=content)
-
+        
         stats = await client.stats()
         log.info("Graph stats after ingestion", stats=stats)
 
@@ -65,10 +64,10 @@ async def main():
         session = await client._rpc("smp/session/open", {"agent_id": "test_agent", "task": "verify"})
         sid = session["session_id"]
         log.info("Session opened", sid=sid)
-
+        
         lock_res = await client._rpc("smp/lock", {"file_path": "tests/test_codebase/math_utils.py", "session_id": sid})
         log.info("Lock acquired", res=lock_res)
-
+        
         await client._rpc("smp/session/close", {"session_id": sid})
         log.info("Session closed")
 
@@ -77,16 +76,15 @@ async def main():
         sandbox = await client._rpc("smp/sandbox/spawn", {"name": "test_sb"})
         sb_id = sandbox["sandbox_id"]
         log.info("Sandbox spawned", sb_id=sb_id)
-
+        
         exec_res = await client._rpc("smp/sandbox/execute", {"sandbox_id": sb_id, "command": ["ls", "-la"]})
         log.info("Sandbox execution", res=exec_res)
         assert exec_res["exit_code"] == 0, "Sandbox command should succeed"
-
+        
         await client._rpc("smp/sandbox/destroy", {"sandbox_id": sb_id})
         log.info("Sandbox destroyed")
 
         log.info("ALL PRACTICAL TESTS PASSED")
-
 
 if __name__ == "__main__":
     asyncio.run(main())
