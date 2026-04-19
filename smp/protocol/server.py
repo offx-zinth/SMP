@@ -6,8 +6,10 @@ Start with: ``python3.11 -m smp.cli serve``
 from __future__ import annotations
 
 try:
-    import pysqlite3
     import sys
+
+    import pysqlite3
+
     sys.modules["sqlite3"] = pysqlite3
 except ImportError:
     pass
@@ -19,16 +21,18 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.responses import Response
 
+from smp.core.merkle import MerkleIndex, MerkleTree
+from smp.engine.community import CommunityDetector
+from smp.engine.embedding import create_embedding_service
 from smp.engine.enricher import StaticSemanticEnricher
 from smp.engine.graph_builder import DefaultGraphBuilder
 from smp.engine.seed_walk import SeedWalkEngine
-from smp.engine.community import CommunityDetector
-from smp.core.merkle import MerkleIndex
+from smp.engine.query import DefaultQueryEngine
 from smp.logging import get_logger
 from smp.parser.registry import ParserRegistry
 from smp.protocol.dispatcher import handle_rpc
-from smp.store.graph.neo4j_store import Neo4jGraphStore
 from smp.store.chroma_store import ChromaVectorStore
+from smp.store.graph.neo4j_store import Neo4jGraphStore
 
 log = get_logger(__name__)
 
@@ -53,12 +57,16 @@ def create_app(
         vector = ChromaVectorStore()
         await vector.connect()
 
-        enricher = StaticSemanticEnricher()
+        embedding_service = create_embedding_service()
+        await embedding_service.connect()
+
+        enricher = StaticSemanticEnricher(embedding_service=embedding_service)
         community_detector = CommunityDetector(graph_store=graph, vector_store=vector)
-        engine = SeedWalkEngine(graph_store=graph, vector_store=vector, enricher=enricher)
+        default_engine = DefaultQueryEngine(graph_store=graph, enricher=enricher)
+        engine = SeedWalkEngine(graph_store=graph, vector_store=vector, enricher=enricher, delegate=default_engine)
         builder = DefaultGraphBuilder(graph)
         registry = ParserRegistry()
-        merkle_index = MerkleIndex()
+        merkle_index = MerkleIndex(MerkleTree())
 
         safety: dict[str, Any] | None = None
         if safety_enabled:
