@@ -24,6 +24,9 @@ jobs:
       - name: Initialize uv venv
         run: uv venv
         
+      - name: Install ruff and mypy via uv
+        run: uv add --dev ruff mypy
+        
       - name: Install dependencies
         run: uv pip install -e ".[dev]"
         
