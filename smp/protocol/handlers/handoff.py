@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 import msgspec
-
 from smp.core.models import PRCreateParams, ReviewCreateParams
 from smp.protocol.handlers.base import MethodHandler
 
@@ -34,6 +33,68 @@ class HandoffReviewHandler(MethodHandler):
             "review_id": review.review_id,
             "status": review.status,
             "created_at": review.created_at,
+        }
+
+
+class HandoffApproveHandler(MethodHandler):
+    """Handles smp/handoff/approve method."""
+
+    @property
+    def method(self) -> str:
+        return "smp/handoff/approve"
+
+    async def handle(
+        self,
+        params: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        review_id = params.get("review_id")
+        reviewer = params.get("reviewer")
+        if not review_id or not reviewer:
+            raise ValueError("review_id and reviewer are required")
+
+        manager = context["handoff_manager"]
+        success = manager.approve(review_id, reviewer)
+        if not success:
+            raise ValueError(f"Review not found: {review_id}")
+
+        review = manager.get_review(review_id)
+        return {
+            "review_id": review_id,
+            "status": review.status if review else "unknown",
+            "approved_by": reviewer,
+        }
+
+
+class HandoffRejectHandler(MethodHandler):
+    """Handles smp/handoff/reject method."""
+
+    @property
+    def method(self) -> str:
+        return "smp/handoff/reject"
+
+    async def handle(
+        self,
+        params: dict[str, Any],
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        review_id = params.get("review_id")
+        reviewer = params.get("reviewer")
+        reason = params.get("reason", "")
+        if not review_id or not reviewer:
+            raise ValueError("review_id and reviewer are required")
+
+        manager = context["handoff_manager"]
+        success = manager.reject(review_id, reviewer, reason)
+        if not success:
+            raise ValueError(f"Review not found: {review_id}")
+
+        review = manager.get_review(review_id)
+        return {
+            "review_id": review_id,
+            "status": review.status if review else "unknown",
+            "rejected_by": reviewer,
+            "reason": reason,
         }
 
 

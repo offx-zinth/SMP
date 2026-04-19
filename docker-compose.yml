@@ -1,13 +1,15 @@
 services:
   neo4j:
     image: neo4j:5.23-community
+    env_file:
+      - .env
     environment:
-      NEO4J_AUTH: neo4j/${SMP_NEO4J_PASSWORD:-neo4j_secure_password}
+      NEO4J_AUTH: neo4j/${SMP_NEO4J_PASSWORD}
       NEO4J_dbms_security_procedures_unrestricted: apoc.*
       NEO4J_dbms_security_procedures_allowlist: apoc.*
     ports:
-      - "7474:7474"
-      - "7687:7687"
+      - "7475:7474" # Host 7475 maps to Container 7474
+      - "7688:7687" # Host 7688 maps to Container 7687
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs

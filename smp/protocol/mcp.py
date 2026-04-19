@@ -5,6 +5,7 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Any
 
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
@@ -20,6 +21,9 @@ from smp.parser.registry import ParserRegistry
 from smp.protocol.dispatcher import get_dispatcher
 from smp.store.chroma_store import ChromaVectorStore
 from smp.store.graph.neo4j_store import Neo4jGraphStore
+
+# Load environment variables from .env file
+load_dotenv()
 
 log = get_logger(__name__)
 
