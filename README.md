@@ -1,241 +1,99 @@
 # Structural Memory Protocol (SMP)
 
-**High-Fidelity Codebase Intelligence for AI Agents**
+**High-Fidelity Codebase Intelligence Made for AI to Handle Large Codebases Without Breaking**
 
-Structural Memory Protocol (SMP) is a graph-based memory system that provides AI agents with a deep, structured understanding of complex codebases. Unlike RAG which treats code as flat text, SMP models code as a multi-dimensional graph of entities, relationships, and semantic meanings.
+Structural Memory Protocol (SMP) provides AI agents with a "programmer's brain." While traditional RAG treats code as flat text—often leading to context window overflow, hallucinations, and a loss of architectural context—SMP models code as a multi-dimensional graph of entities, relationships, and semantic meanings.
 
-Built with **Python 3.11**, **FastAPI**, and **Neo4j**, SMP enables agents to perform precise code navigation, impact analysis, and safe refactoring — using static analysis (no LLM required).
+By combining structural graph analysis with vector-seeded discovery, SMP allows AI agents to navigate massive codebases with precision, perform deep impact analysis, and execute safe refactorings without losing sight of the big picture.
 
 ---
 
-## Quickstart (Docker Compose)
+## 🚀 Key Features
 
-The fastest way to get SMP running:
+*   **AI-First Architecture:** Specifically designed to prevent agents from "breaking" when facing 100k+ line codebases.
+*   **MCP Native:** Fully supports the **Model Context Protocol (MCP)**, allowing SMP to act as a standardized memory layer for any MCP-compatible AI IDE or agent.
+*   **Community-Routed Graph RAG:** Uses a hybrid approach—**ChromaDB** for high-speed seed discovery and **Neo4j** for structural traversal—to provide exact, context-aware results.
+*   **Hybrid Linking:** Combines static AST analysis (Tree-sitter) with runtime execution traces (eBPF) to resolve dynamic dependencies that static analysis misses.
+*   **Automatic Community Detection:** Partitions the codebase into structural clusters, allowing agents to reason about domain boundaries and architecture.
+*   **Blast Radius Analysis:** Quantify the exact impact of a change before a single line of code is edited.
 
+---
+
+## 🛠 Quickstart
+
+### 1. Docker Compose (Fastest)
 ```bash
-# Clone the repository
 git clone https://github.com/your-org/smp.git
 cd smp
-
-# Copy and configure environment
-cp .env.example .env
-# Edit .env with your Neo4j password
-
-# Start all services
+cp .env.example .env # Edit with your Neo4j password
 docker compose up -d
-
-# Verify health
-curl http://localhost:8420/health
-# Returns: {"status":"ok"}
+curl http://localhost:8420/health # Returns: {"status":"ok"}
 ```
 
----
+### 2. Manual Installation
+**Requirements:** Python 3.11, Neo4j 5.x.
 
-## Quickstart (Manual)
-
-### 1. Requirements
-- **Python 3.11+**
-- **Neo4j 5.x** (Local or AuraDB)
-
-### 2. Environment
 ```bash
-# Copy the example and configure
+# Environment Setup
 cp .env.example .env
-
-# Edit .env with your credentials:
-#   SMP_NEO4J_PASSWORD=your_neo4j_password
-```
-
-### 3. Install & Run
-```bash
-# Clone and enter the repo
-git clone https://github.com/offx-zinth/smp.git
-cd smp
-
-# Create venv with Python 3.11
 python3.11 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 
-# Start the server
-smp serve
+# Start the Server
+smp serve --port 8420
 ```
 
 ---
 
-## Architecture: Manual Efficient Method (SMP V2)
+## 📐 How it Works: The "Programmer's Brain"
 
-SMP V2 is designed for production-grade efficiency. It relies on **static AST extraction** and **Neo4j full-text indexing** — no LLM or vector embeddings required.
+SMP replaces flat-text retrieval with a structured pipeline:
 
-- **Parser**: Tree-sitter extracts functions, classes, imports, and docstrings directly from AST.
-- **Enricher**: Extracts docstrings, decorators, and type annotations statically.
-- **Linker**: Namespaced cross-file resolution for CALLS edges.
-- **Query Engine**: Neo4j full-text index (BM25) for keyword search.
-- **Safety Protocol**: Session management, dry-runs, and isolated sandbox execution.
+1.  **Ingestion:** Tree-sitter parses source code into an AST $\rightarrow$ Graph Builder creates entities (Classes, Functions) $\rightarrow$ Linker resolves `CALLS` and `IMPORTS` edges.
+2.  **Enrichment:** Static metadata (docstrings, type annotations) is extracted and indexed.
+3.  **Vector Seeding:** ChromaDB stores embeddings of function signatures and docstrings for initial "seed" discovery.
+4.  **Graph Traversal:** From the seeds, the engine performs a multi-hop walk in Neo4j to capture the structural context surrounding the target code.
+5.  **Routing:** Community detection (Louvain) routes queries to specific architectural modules, reducing noise and increasing precision.
 
 ---
 
-## Demo: JSON-RPC Query
+## 💻 Usage
 
-Ingest a codebase and query it:
-
+### Ingest and Query via CLI
 ```bash
 # Ingest a project
 smp ingest /path/to/your/project
 
-# Query via JSON-RPC
-curl -X POST http://localhost:8420/rpc \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "smp/context",
-    "params": {
-      "file_path": "smp/core/models.py",
-      "scope": "edit",
-      "depth": 2
-    },
-    "id": 1
-  }'
+# Query the intelligence layer
+smp query "Where is the authentication logic handled?"
 ```
 
-**Response:**
-```json
-{
-  "jsonrpc": "2.0",
-  "result": {
-    "self": {
-      "id": "smp/core/models.py::GraphNode",
-      "type": "Class",
-      "name": "GraphNode",
-      "signature": "class GraphNode",
-      "start_line": 130,
-      "end_line": 220
-    },
-    "neighbors": [
-      {
-        "id": "smp/core/models.py::StructuralProperties",
-        "type": "Class",
-        "relationship": "CONTAINS"
-      },
-      {
-        "id": "smp/core/models.py::SemanticProperties",
-        "type": "Class", 
-        "relationship": "CONTAINS"
-      }
-    ],
-    "context": {
-      "file": "smp/core/models.py",
-      "imports": ["msgspec", "typing"],
-      "defines": ["GraphNode", "GraphEdge", "NodeType", "EdgeType"]
-    }
-  },
-  "id": 1
-}
-```
-
----
-
-## Key Capabilities
-
-* **Graph-Augmented Retrieval:** Navigate via `CALLS`, `INHERITS`, `IMPORTS` relationships
-* **Semantic Search:** Neo4j full-text index (BM25) for keyword search across docstrings/tags
-* **Static Enrichment:** Docstrings, decorators, and type annotations extracted from AST
-* **Impact Assessment:** Determine the "blast radius" before changes
-* **Safety & Sandboxing:** Session management, dry-runs, isolated execution
-* **Multi-Language:** Python and TypeScript/JavaScript via Tree-sitter
-
----
-
-## Architecture
-
-```
-smp/
-├── smp/
-│   ├── core/            # Models, logging
-│   ├── engine/         # Query, enricher, linker, safety
-│   ├── protocol/      # JSON-RPC 2.0 API
-│   │   └── handlers/  # Modular method handlers
-│   ├── store/         # Neo4j (graph + full-text)
-│   ├── parser/        # Tree-sitter parsing
-│   ├── sandbox/        # Isolated execution
-│   ├── cli.py         # CLI
-│   └── client.py      # Python SDK
-├── tests/             # Test suite
-└── .github/workflows/# CI/CD
-```
-
----
-
-## Usage
-
-### Ingest a Project
-```bash
-smp ingest /path/to/project --clear
-```
-
-### Run Server
-```bash
-smp serve --port 8420 --safety
-```
-
-### Python SDK
+### Python SDK Example
 ```python
 import asyncio
 from smp.client import SMPClient
 
 async def main():
     async with SMPClient("http://localhost:8420") as client:
-        # Semantic search
-        results = await client.locate("authentication logic")
+        # Locate a feature using Community-Routed Graph RAG
+        results = await client.locate("user registration flow")
         
-        # Trace call graph
-        graph = await client.trace("src/auth.py::login", depth=5)
-        
-        # Impact assessment
-        impact = await client.assess_impact("src/models/user.py::User")
-        print(f"Affects {impact['total_affected_nodes']} nodes")
+        # Perform impact analysis
+        impact = await client.assess_impact("src/auth/manager.py::authenticate")
+        print(f"Change affects {impact['total_affected_nodes']} nodes")
 
 asyncio.run(main())
 ```
 
 ---
 
-## Development
-
-```bash
-# Format
-ruff format .
-
-# Lint
-ruff check .
-
-# Type check
-mypy smp/
-
-# Test
-pytest
-```
+## 📖 Documentation
+- [Architecture Guide](ARCHITECTURE.md) - Deep dive into the Graph RAG pipeline.
+- [API Reference](API.md) - JSON-RPC 2.0 specification.
+- [User Guide](USER_GUIDE.md) - Tutorials and advanced workflows.
+- [Contributing](CONTRIBUTING.md) - How to extend SMP.
 
 ---
 
-## Troubleshooting
-
-| Issue | Solution |
-|:---|:---|
-| `sqlite3` ImportError | Install `pysqlite3-binary` |
-| Neo4j Connection | Check `SMP_NEO4J_URI` and credentials in `.env` |
-| SyntaxError | Use Python 3.11 |
-| Enrichment Timeout | Set `SMP_ENRICHMENT=none` in `.env` |
-
----
-
-## Contributing
-
-1. Use `feature/` or `fix/` branches
-2. Follow patterns in `AGENTS.md`
-3. Add tests for new features
-4. Run `ruff check . && ruff format . && mypy smp/ && pytest`
-
----
-
-*SMP — Empowering agents with structural memory.*
+*SMP — Giving AI agents the structural memory to master any codebase.*
