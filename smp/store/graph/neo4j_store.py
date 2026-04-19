@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from neo4j import AsyncDriver, AsyncGraphDatabase
+from neo4j import AsyncDriver, AsyncGraphDatabase, basic_auth
 
 from smp.core.models import (
     Annotations,
@@ -163,7 +163,7 @@ class Neo4jGraphStore(GraphStore):
         self._driver: AsyncDriver | None = None
 
     async def connect(self) -> None:
-        self._driver = AsyncGraphDatabase.driver(self._uri, auth=(self._user, self._password))
+        self._driver = AsyncGraphDatabase.driver(self._uri, auth=basic_auth(self._user, self._password))
         await self._driver.verify_connectivity()
         log.info("neo4j_connected", uri=self._uri)
         await self._execute(f"CREATE CONSTRAINT IF NOT EXISTS FOR (n:{_ALL_LABEL}) REQUIRE n.id IS UNIQUE")

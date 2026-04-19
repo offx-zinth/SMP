@@ -1,0 +1,168 @@
+{
+  "smp/navigate": {
+    "status": "PASSED",
+    "result": "{'entity': {'id': 'src/auth/manager.py::Function::authenticate_user::5', 'type': 'Function', 'file_path': 'src/auth/manager.py', 'name': 'authenticate",
+    "duration": 0.038244
+  },
+  "smp/locate": {
+    "status": "PASSED",
+    "result": "{'matches': [{'query': 'authenticate_user', 'routed_community': None, 'seed_count': 1, 'total_walked': 8, 'results': [RankedResult(node_id='src/auth/m",
+    "duration": 0.134779
+  },
+  "smp/search": {
+    "status": "PASSED",
+    "result": "{'matches': [], 'total': 0, 'hint': 'Try broadening scope or using match: any'}",
+    "duration": 0.006824
+  },
+  "smp/trace": {
+    "status": "PASSED",
+    "result": "{'nodes': []}",
+    "duration": 0.005103
+  },
+  "smp/flow": {
+    "status": "PASSED",
+    "result": "{'path': [], 'data_transformations': []}",
+    "duration": 0.039851
+  },
+  "smp/context": {
+    "status": "PASSED",
+    "result": "{'self': {'id': 'src/auth/manager.py::File::src/auth/manager.py::1', 'type': 'File', 'file_path': 'src/auth/manager.py', 'name': '/home/bhagyarekhab/S",
+    "duration": 0.09238
+  },
+  "smp/impact": {
+    "status": "PASSED",
+    "result": "{'affected_files': ['tests/test_auth.py'], 'affected_functions': ['test_auth_fail', 'test_auth_success'], 'severity': 'low', 'recommendations': []}",
+    "duration": 0.022385
+  },
+  "smp/graph/why": {
+    "status": "PASSED",
+    "result": "{'entity': 'authenticate_user', 'name': 'authenticate_user', 'file': 'src/auth/manager.py', 'reasons': [{'type': 'incoming', 'edge_type': 'CALLS', 'fr",
+    "duration": 0.032292
+  },
+  "smp/update": {
+    "status": "PASSED",
+    "result": "{'file_path': 'src/auth/manager.py', 'nodes': 0, 'edges': 0, 'errors': 1, 'message': 'No nodes extracted'}",
+    "duration": 0.012714
+  },
+  "smp/batch_update": {
+    "status": "PASSED",
+    "result": "{'updates': 1, 'results': [{'file_path': 'src/auth/manager.py', 'nodes': 0, 'edges': 0, 'errors': 1, 'message': 'No nodes extracted'}]}",
+    "duration": 0.003115
+  },
+  "smp/reindex": {
+    "status": "PASSED",
+    "result": "{'status': 'reindex_requested', 'scope': 'full'}",
+    "duration": 0.000109
+  },
+  "smp/enrich": {
+    "status": "PASSED",
+    "result": "{'node_id': 'src/auth/manager.py::Function::authenticate_user::5', 'status': 'manually_annotated', 'docstring': 'Validates user credentials and return",
+    "duration": 0.006893
+  },
+  "smp/enrich/batch": {
+    "status": "PASSED",
+    "result": "{'enriched': 3, 'skipped': 0, 'no_metadata': 7, 'failed': 0, 'no_metadata_nodes': ['src/auth/manager.py::File::src/auth/manager.py::1', 'src/auth/mana",
+    "duration": 0.022246
+  },
+  "smp/enrich/status": {
+    "status": "PASSED",
+    "result": "{'total_nodes': 11, 'has_docstring': 4, 'has_annotations': 0, 'has_tags': 11, 'manually_annotated': 1, 'no_metadata': 7, 'stale': 0, 'coverage_pct': 3",
+    "duration": 0.008629
+  },
+  "smp/enrich/stale": {
+    "status": "PASSED",
+    "result": "{'stale_count': 0, 'stale_nodes': []}",
+    "duration": 0.012934
+  },
+  "smp/annotate": {
+    "status": "PASSED",
+    "result": "{'node_id': 'src/auth/manager.py::Function::authenticate_user::5', 'status': 'annotated', 'manually_set': True, 'annotated_at': '2026-04-19T17:44:48.8",
+    "duration": 0.025573
+  },
+  "smp/annotate/bulk": {
+    "status": "PASSED",
+    "result": "{'annotated': 1, 'failed': 0}",
+    "duration": 0.032392
+  },
+  "smp/tag": {
+    "status": "PASSED",
+    "result": "{'nodes_affected': 11, 'action': 'add', 'scope': 'full'}",
+    "duration": 0.069286
+  },
+  "smp/telemetry": {
+    "status": "PASSED",
+    "result": "{'uptime_seconds': 0, 'total_nodes_tracked': 0, 'total_hits': 0, 'total_errors': 0, 'hot_node_count': 0}",
+    "duration": 0.000245
+  },
+  "smp/session/open": {
+    "status": "PASSED",
+    "result": "{'session_id': 'ses_af5a06', 'granted_scope': [], 'denied_scope': ['src/auth/manager.py'], 'active_locks': [], 'warnings': [], 'expires_at': '2026-04-",
+    "duration": 0.010177
+  },
+  "smp/checkpoint": {
+    "status": "PASSED",
+    "result": "{'checkpoint_id': 'chk_e34624', 'files_snapshotted': [], 'snapshot_at': '2026-04-19T17:44:48.960297+00:00'}",
+    "duration": 0.003136
+  },
+  "smp/lock": {
+    "status": "PASSED",
+    "result": "{'granted': ['src/auth/manager.py'], 'denied': []}",
+    "duration": 0.009707
+  },
+  "smp/unlock": {
+    "status": "PASSED",
+    "result": "{'released': ['src/auth/manager.py']}",
+    "duration": 0.009418
+  },
+  "smp/session/close": {
+    "status": "PASSED",
+    "result": "{'session_id': 'ses_af5a06', 'files_written': [], 'files_read': [], 'duration_ms': 32, 'audit_log_id': 'aud_e5ccec'}",
+    "duration": 0.014694
+  },
+  "smp/verify/integrity": {
+    "status": "PASSED",
+    "result": "{'passed': True, 'mutations_detected': [], 'warnings': [], 'checks_run': 0}",
+    "duration": 0.001523
+  },
+  "smp/audit/get": {
+    "status": "FAILED",
+    "error": "Audit log not found: nonexistent",
+    "traceback": "Traceback (most recent call last):\n  File \"/home/bhagyarekhab/SMP/full_test.py\", line 60, in test_handler\n    result = await handler.handle(processed_params, self.state)\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/bhagyarekhab/SMP/smp/protocol/handlers/safety.py\", line 255, in handle\n    raise ValueError(f\"Audit log not found: {agp.audit_log_id or params.get('session_id')}\")\nValueError: Audit log not found: nonexistent\n",
+    "duration": 8.9e-05
+  },
+  "smp/dryrun": {
+    "status": "PASSED",
+    "result": "{'structural_delta': {'nodes_added': 0, 'nodes_modified': 1, 'nodes_removed': 0, 'signature_changed': False}, 'impact': {'affected_files': [], 'broken",
+    "duration": 0.001399
+  },
+  "smp/handoff/review": {
+    "status": "PASSED",
+    "result": "{'review_id': 'rev_56800643', 'status': 'pending', 'created_at': '2026-04-19T17:44:49.000892+00:00'}",
+    "duration": 0.001418
+  },
+  "smp/handoff/approve": {
+    "status": "PASSED",
+    "result": "{'review_id': 'rev_56800643', 'status': 'approved', 'approved_by': 'test-reviewer'}",
+    "duration": 0.001485
+  },
+  "smp/handoff/reject": {
+    "status": "PASSED",
+    "result": "{'review_id': 'rev_56800643', 'status': 'rejected', 'rejected_by': 'test-reviewer', 'reason': 'test'}",
+    "duration": 0.001995
+  },
+  "smp/rollback": {
+    "status": "PASSED",
+    "result": "{'status': 'error', 'reason': 'Checkpoint not found'}",
+    "duration": 0.000102
+  },
+  "smp/handoff/pr": {
+    "status": "PASSED",
+    "result": "{'pr_id': 'pr_d8d83b05', 'status': 'open', 'url': None, 'created_at': '2026-04-19T17:44:49.005954+00:00'}",
+    "duration": 0.00182
+  },
+  "smp/guard/check": {
+    "status": "PASSED",
+    "result": "{'verdict': 'blocked', 'reasons': ['Session not found or expired']}",
+    "duration": 9.9e-05
+  }
+}

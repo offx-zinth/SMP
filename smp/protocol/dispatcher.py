@@ -38,6 +38,8 @@ from smp.protocol.handlers.enrichment import (
 from smp.protocol.handlers.handoff import (
     HandoffPRHandler,
     HandoffReviewHandler,
+    HandoffApproveHandler,
+    HandoffRejectHandler,
 )
 from smp.protocol.handlers.memory import (
     BatchUpdateHandler,
@@ -163,7 +165,10 @@ class RpcDispatcher:
             IndexExportHandler,
             IndexImportHandler,
             HandoffReviewHandler,
+            HandoffApproveHandler,
+            HandoffRejectHandler,
             HandoffPRHandler,
+
         ]:
             handler = handler_cls()
             self._handlers[handler.method] = handler
