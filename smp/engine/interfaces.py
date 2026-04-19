@@ -55,10 +55,13 @@ class SemanticEnricher(abc.ABC):
     async def embed(self, text: str) -> list[float]:
         """No-op for static enricher."""
 
+<<<<<<< HEAD
     @abc.abstractmethod
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts."""
 
+=======
+>>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
 
 class QueryEngine(abc.ABC):
     """High-level query interface over the memory store."""
