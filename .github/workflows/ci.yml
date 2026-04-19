@@ -28,13 +28,13 @@ jobs:
         run: uv pip install -e ".[dev]"
         
       - name: Check formatting with ruff
-        run: uv run ruff format --check .
+        run: . .venv/bin/activate && ruff format --check .
         
       - name: Lint with ruff
-        run: uv run ruff check .
+        run: . .venv/bin/activate && ruff check .
         
       - name: Type check with mypy
-        run: uv run mypy smp/
+        run: . .venv/bin/activate && mypy smp/
         
       - name: Run tests
-        run: uv run pytest tests/ -x --tb=short
+        run: . .venv/bin/activate && pytest tests/ -x --tb=short
