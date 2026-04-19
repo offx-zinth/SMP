@@ -26,8 +26,8 @@ from smp.engine.community import CommunityDetector
 from smp.engine.embedding import create_embedding_service
 from smp.engine.enricher import StaticSemanticEnricher
 from smp.engine.graph_builder import DefaultGraphBuilder
-from smp.engine.seed_walk import SeedWalkEngine
 from smp.engine.query import DefaultQueryEngine
+from smp.engine.seed_walk import SeedWalkEngine
 from smp.logging import get_logger
 from smp.parser.registry import ParserRegistry
 from smp.protocol.dispatcher import handle_rpc

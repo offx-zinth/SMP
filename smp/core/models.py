@@ -313,6 +313,7 @@ class SessionRecoverParams(msgspec.Struct):
 
 
 class GuardCheckParams(msgspec.Struct):
+    session_id: str = ""
     target: str = ""
     intended_change: str = ""
 

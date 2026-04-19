@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import time
-from ..utils.crypto import generate_secure_token
 
 
 class JWTUtils:

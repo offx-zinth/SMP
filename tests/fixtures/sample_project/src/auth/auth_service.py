@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def hash_password(password: str, salt: str | None = None) -> tuple[str, str]:
@@ -24,7 +24,7 @@ def verify_password(password: str, hashed: str, salt: str) -> bool:
 
 def generate_token(user_id: str, secret: str = "default_secret") -> str:
     """Generate a simple auth token."""
-    payload = f"{user_id}:{datetime.now(timezone.utc).isoformat()}"
+    payload = f"{user_id}:{datetime.now(UTC).isoformat()}"
     combined = f"{payload}{secret}".encode()
     return hashlib.sha256(combined).hexdigest()
 

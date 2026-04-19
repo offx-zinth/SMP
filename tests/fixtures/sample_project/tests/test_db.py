@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-from src.db.models import User, Order, DatabaseConnection, UserModel, OrderModel
+from src.db.models import DatabaseConnection, Order, User, UserModel
 
 
 def test_user_dataclass() -> None:

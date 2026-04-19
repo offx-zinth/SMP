@@ -11,7 +11,6 @@ from smp.engine.graph_builder import DefaultGraphBuilder
 from smp.parser.registry import ParserRegistry
 from smp.store.graph.neo4j_store import Neo4jGraphStore
 
-
 FIXTURE_PATH = Path("/home/bhagyarekhab/SMP/tests/fixtures/sample_project/src")
 
 
@@ -88,7 +87,7 @@ class TestParserRegistryIntegration:
         total_nodes = sum(len(doc.nodes) for _, doc in results)
         total_errors = sum(len(doc.errors) for _, doc in results)
 
-        assert len(results) == len(files), f"Not all files were parsed"
+        assert len(results) == len(files), "Not all files were parsed"
         assert total_nodes > 0, "No nodes extracted from any file"
         assert total_errors == 0, f"Parse errors in files: {[(f, doc.errors) for f, doc in results if doc.errors]}"
 
