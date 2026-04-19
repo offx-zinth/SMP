@@ -1,6 +1,4 @@
-Here is an expanded, standalone, and highly detailed `CONTRIBUTING.md` file. It goes deeper into the specific developer workflows, testing graph databases, adding protocol methods, and code standards required for the Structural Memory Protocol (SMP).
 
-***
 
 # Contributing to the Structural Memory Protocol (SMP)
 
