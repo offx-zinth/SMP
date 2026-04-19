@@ -1,0 +1,52 @@
+services:
+  neo4j:
+    image: neo4j:5.23-community
+    environment:
+      NEO4J_AUTH: neo4j/${SMP_NEO4J_PASSWORD:-neo4j_secure_password}
+      NEO4J_dbms_security_procedures_unrestricted: apoc.*
+      NEO4J_dbms_security_procedures_allowlist: apoc.*
+    ports:
+      - "7475:7474" # Host 7475 maps to Container 7474
+      - "7688:7687" # Host 7688 maps to Container 7687
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p ${SMP_NEO4J_PASSWORD:-neo4j_secure_password} 'RETURN 1;' || exit 1"]
+      interval: 10s
+      timeout: 30s
+      retries: 5
+
+  chromadb:
+    image: chromadb/chroma:latest
+    ports:
+      - "8000:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+
+  smp:
+    build: .
+    ports:
+      - "8420:8420"
+    environment:
+      SMP_NEO4J_URI: bolt://neo4j:7687
+      SMP_NEO4J_USER: neo4j
+      SMP_NEO4J_PASSWORD: ${SMP_NEO4J_PASSWORD:-neo4j_secure_password}
+      SMP_ENRICHMENT: ${SMP_ENRICHMENT:-none}
+      SMP_CHROMA_PERSIST_DIR: /chroma/chroma
+    depends_on:
+      neo4j:
+        condition: service_healthy
+      chromadb:
+        condition: service_started
+    env_file:
+      - .env.example
+    volumes:
+      - .:/app
+      - smp_data:/root/.smp
+
+volumes:
+  neo4j_data:
+  neo4j_logs:
+  chroma_data:
+  smp_data:
