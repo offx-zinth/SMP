@@ -6,13 +6,8 @@ services:
       NEO4J_dbms_security_procedures_unrestricted: apoc.*
       NEO4J_dbms_security_procedures_allowlist: apoc.*
     ports:
-<<<<<<< HEAD
-      - "7475:7474" # Host 7475 maps to Container 7474
-      - "7688:7687" # Host 7688 maps to Container 7687
-=======
       - "7474:7474"
       - "7687:7687"
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
     volumes:
       - neo4j_data:/data
       - neo4j_logs:/logs
@@ -54,8 +49,4 @@ volumes:
   neo4j_data:
   neo4j_logs:
   chroma_data:
-<<<<<<< HEAD
   smp_data:
-=======
-  smp_data:
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d

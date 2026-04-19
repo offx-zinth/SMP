@@ -99,10 +99,7 @@ class SeedWalkEngine(QueryEngineInterface):
         beta: float = BETA,
         gamma: float = GAMMA,
         route_threshold: float = ROUTE_CONFIDENCE_THRESHOLD,
-<<<<<<< HEAD
         delegate: QueryEngineInterface | None = None,
-=======
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
     ) -> None:
         self._graph = graph_store
         self._vector = vector_store
@@ -111,10 +108,7 @@ class SeedWalkEngine(QueryEngineInterface):
         self._beta = beta
         self._gamma = gamma
         self._route_threshold = route_threshold
-<<<<<<< HEAD
         self._delegate = delegate
-=======
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
 
     async def _route_to_community(self, query: str) -> tuple[str | None, float]:
         if self._vector is None:
@@ -381,17 +375,13 @@ class SeedWalkEngine(QueryEngineInterface):
         return [msgspec.structs.asdict(result)]
 
     async def navigate(self, query: str, include_relationships: bool = True) -> dict[str, Any]:
-<<<<<<< HEAD
         if self._delegate:
             return await self._delegate.navigate(query, include_relationships)
-=======
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
         return {}
 
     async def trace(
         self, start: str, relationship: str = "CALLS", depth: int = 3, direction: str = "outgoing"
     ) -> list[dict[str, Any]]:
-<<<<<<< HEAD
         if self._delegate:
             return await self._delegate.trace(start, relationship, depth, direction)
         return []
@@ -404,24 +394,13 @@ class SeedWalkEngine(QueryEngineInterface):
     async def assess_impact(self, entity: str, change_type: str = "delete") -> dict[str, Any]:
         if self._delegate:
             return await self._delegate.assess_impact(entity, change_type)
-=======
-        return []
-
-    async def get_context(self, file_path: str, scope: str = "edit", depth: int = 2) -> dict[str, Any]:
-        return {}
-
-    async def assess_impact(self, entity: str, change_type: str = "delete") -> dict[str, Any]:
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
         return {}
 
     async def search(
         self, query: str, match: str = "any", filters: dict[str, Any] | None = None, top_k: int = 5
     ) -> dict[str, Any]:
-<<<<<<< HEAD
         if self._delegate:
             return await self._delegate.search(query, match, filters, top_k)
-=======
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
         return {}
 
     async def conflict(
@@ -430,11 +409,8 @@ class SeedWalkEngine(QueryEngineInterface):
         proposed_change: str = "",
         context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-<<<<<<< HEAD
         if self._delegate:
             return await self._delegate.conflict(entity, proposed_change, context)
-=======
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
         return {"conflicts": []}
 
     async def diff(
@@ -443,11 +419,8 @@ class SeedWalkEngine(QueryEngineInterface):
         to_snapshot: str,
         scope: str = "full",
     ) -> dict[str, Any]:
-<<<<<<< HEAD
         if self._delegate:
             return await self._delegate.diff(from_snapshot, to_snapshot, scope)
-=======
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
         return {"diff": {}}
 
     async def plan(
@@ -457,11 +430,8 @@ class SeedWalkEngine(QueryEngineInterface):
         change_type: str = "refactor",
         scope: str = "full",
     ) -> dict[str, Any]:
-<<<<<<< HEAD
         if self._delegate:
             return await self._delegate.plan(change_description, target_file, change_type, scope)
-=======
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
         return {"steps": []}
 
     async def why(
@@ -470,7 +440,6 @@ class SeedWalkEngine(QueryEngineInterface):
         relationship: str = "",
         depth: int = 3,
     ) -> dict[str, Any]:
-<<<<<<< HEAD
         if self._delegate:
             return await self._delegate.why(entity, relationship, depth)
         return {"reasoning": []}
@@ -478,11 +447,6 @@ class SeedWalkEngine(QueryEngineInterface):
     async def find_flow(self, start: str, end: str, flow_type: str = "data") -> dict[str, Any]:
         if self._delegate:
             return await self._delegate.find_flow(start, end, flow_type)
-=======
-        return {"reasoning": []}
-
-    async def find_flow(self, start: str, end: str, flow_type: str = "data") -> dict[str, Any]:
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
         return {}
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ..db.user_repository import UserRepository, User
+from ..db.user_repository import User, UserRepository
 
 
 class UserManager:

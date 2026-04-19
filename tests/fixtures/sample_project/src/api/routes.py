@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.auth import AuthService
-from src.db import UserModel, DatabaseConnection
+from src.db import DatabaseConnection, UserModel
 
 
 def create_app() -> dict[str, Any]:

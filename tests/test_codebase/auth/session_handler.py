@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from .jwt_utils import JWTUtils
 from ..db.user_repository import UserRepository
+from .jwt_utils import JWTUtils
 
 
 class SessionHandler:

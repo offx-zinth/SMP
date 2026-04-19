@@ -1,5 +1,6 @@
 import asyncio
 import os
+
 from smp.client import SMPClient
 from smp.logging import get_logger
 
@@ -13,7 +14,7 @@ async def main():
         files = ["math_utils.py", "calculator.py"]
         for f in files:
             path = os.path.join(test_dir, f)
-            with open(path, "r") as file:
+            with open(path) as file:
                 content = file.read()
             await client.update(path, content=content)
         

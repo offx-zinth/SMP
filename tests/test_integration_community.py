@@ -4,9 +4,6 @@ from __future__ import annotations
 
 from collections import defaultdict
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
-
-import pytest
 
 from smp.core.models import EdgeType, GraphEdge, GraphNode, NodeType, SemanticProperties, StructuralProperties
 from smp.engine.community import CommunityDetector

@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import pytest
-from src.auth import AuthService, hash_password, verify_password, generate_token
+from src.auth import AuthService, generate_token, hash_password, verify_password
 
 
 def test_hash_password_returns_tuple() -> None:

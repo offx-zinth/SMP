@@ -1,33 +1,17 @@
-<<<<<<< HEAD
 """Static semantic enricher with optional LLM-based embedding."""
-=======
-"""Static semantic enricher — AST-based extraction.
-
-Extracts docstrings, inline comments, decorators, type annotations,
-and computes source hashes purely from the AST.
-No LLM or embedding generation.
-"""
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
 
 from __future__ import annotations
 
 import hashlib
 from datetime import UTC, datetime
-<<<<<<< HEAD
 from typing import TYPE_CHECKING
-=======
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
 
 from smp.core.models import GraphNode
 from smp.engine.interfaces import SemanticEnricher as SemanticEnricherInterface
 from smp.logging import get_logger
 
-<<<<<<< HEAD
 if TYPE_CHECKING:
     from smp.engine.embedding import EmbeddingService
-
-=======
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
 log = get_logger(__name__)
 
 
@@ -38,28 +22,19 @@ def _compute_source_hash(name: str, file_path: str, start: int, end: int, signat
 
 
 class StaticSemanticEnricher(SemanticEnricherInterface):
-<<<<<<< HEAD
     """Static AST-based semantic enricher with optional embedding support."""
 
     def __init__(self, embedding_service: EmbeddingService | None = None) -> None:
-=======
-    """Static AST-based semantic enricher. No LLM, no embeddings."""
-
-    def __init__(self) -> None:
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
         self._enrichment_counts: dict[str, int] = {
             "enriched": 0,
             "skipped": 0,
             "no_metadata": 0,
             "failed": 0,
         }
-<<<<<<< HEAD
         self._embedding_service = embedding_service
 
     def set_embedding_service(self, service: EmbeddingService) -> None:
         self._embedding_service = service
-=======
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
 
     async def enrich_node(
         self,
@@ -110,7 +85,6 @@ class StaticSemanticEnricher(SemanticEnricherInterface):
             enriched.append(result)
         return enriched
 
-<<<<<<< HEAD
     @property
     def has_llm(self) -> bool:
         """Check if LLM-based embedding is available."""
@@ -127,11 +101,6 @@ class StaticSemanticEnricher(SemanticEnricherInterface):
         if self._embedding_service is None:
             return [[] for _ in texts]
         return await self._embedding_service.embed_batch(texts)
-=======
-    async def embed(self, text: str) -> list[float]:
-        """No-op embedding — static enricher does not use vectors."""
-        return []
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
 
     def get_counts(self) -> dict[str, int]:
         """Return enrichment statistics."""
@@ -140,8 +109,4 @@ class StaticSemanticEnricher(SemanticEnricherInterface):
     def reset_counts(self) -> None:
         """Reset enrichment counters."""
         for key in self._enrichment_counts:
-<<<<<<< HEAD
             self._enrichment_counts[key] = 0
-=======
-            self._enrichment_counts[key] = 0
->>>>>>> 87cfd9650622e51c4c94d43d490450a82a87ad3d
