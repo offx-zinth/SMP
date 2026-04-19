@@ -28,13 +28,13 @@ jobs:
         run: uv pip install -e ".[dev]"
         
       - name: Check formatting with ruff
-        run: ruff format --check .
+        run: uv run ruff format --check .
         
       - name: Lint with ruff
-        run: ruff check .
+        run: uv run ruff check .
         
       - name: Type check with mypy
-        run: mypy smp/
+        run: uv run mypy smp/
         
       - name: Run tests
-        run: pytest tests/ -x --tb=short
+        run: uv run pytest tests/ -x --tb=short
