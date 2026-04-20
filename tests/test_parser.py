@@ -20,6 +20,39 @@ class TestDetectLanguage:
     def test_typescript(self) -> None:
         assert detect_language("foo.ts") == Language.TYPESCRIPT
 
+    def test_javascript(self) -> None:
+        assert detect_language("foo.js") == Language.JAVASCRIPT
+
+    def test_java(self) -> None:
+        assert detect_language("Foo.java") == Language.JAVA
+
+    def test_c(self) -> None:
+        assert detect_language("foo.c") == Language.C
+
+    def test_cpp(self) -> None:
+        assert detect_language("foo.cpp") == Language.CPP
+
+    def test_csharp(self) -> None:
+        assert detect_language("Foo.cs") == Language.CSHARP
+
+    def test_go(self) -> None:
+        assert detect_language("foo.go") == Language.GO
+
+    def test_rust(self) -> None:
+        assert detect_language("foo.rs") == Language.RUST
+
+    def test_php(self) -> None:
+        assert detect_language("foo.php") == Language.PHP
+
+    def test_swift(self) -> None:
+        assert detect_language("Foo.swift") == Language.SWIFT
+
+    def test_kotlin(self) -> None:
+        assert detect_language("Foo.kt") == Language.KOTLIN
+
+    def test_ruby(self) -> None:
+        assert detect_language("foo.rb") == Language.RUBY
+
     def test_tsx(self) -> None:
         assert detect_language("foo.tsx") == Language.TYPESCRIPT
 
@@ -27,7 +60,7 @@ class TestDetectLanguage:
         assert detect_language("foo.jsx") == Language.TYPESCRIPT
 
     def test_unknown(self) -> None:
-        assert detect_language("foo.rs") == Language.UNKNOWN
+        assert detect_language("foo.xyz") == Language.UNKNOWN
 
     def test_no_extension(self) -> None:
         assert detect_language("Makefile") == Language.UNKNOWN

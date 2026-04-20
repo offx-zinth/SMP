@@ -20,8 +20,13 @@ from smp.store.graph.neo4j_store import Neo4jGraphStore
 if "SMP_NEO4J_URI" not in os.environ:
     try:
         from dotenv import load_dotenv
+        import pathlib
 
-        load_dotenv()
+        # Find the project root and load .env
+        project_root = pathlib.Path(__file__).parent.parent
+        env_file = project_root / ".env"
+        if env_file.exists():
+            load_dotenv(env_file)
     except ImportError:
         pass
 

@@ -17,6 +17,7 @@ from smp.engine.graph_builder import DefaultGraphBuilder
 from smp.engine.query import DefaultQueryEngine
 from smp.parser.registry import ParserRegistry
 from smp.protocol.router import handle_rpc
+from smp.store.chroma_store import ChromaVectorStore
 from smp.store.graph.neo4j_store import Neo4jGraphStore
 
 
@@ -26,11 +27,13 @@ def server():
     graph = Neo4jGraphStore()
     enricher = StaticSemanticEnricher()
     registry = ParserRegistry()
+    vector = ChromaVectorStore()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await graph.connect()
         await graph.clear()
+        await vector.connect()
         nodes = [
             GraphNode(
                 id="f.py::FILE::f.py::1",
@@ -66,9 +69,12 @@ def server():
         app.state.builder = DefaultGraphBuilder(graph)
         app.state.enricher = enricher
         app.state.registry = registry
+        app.state.vector = vector
+        app.state.safety = None
         yield
         await graph.clear()
         await graph.close()
+        await vector.close()
 
     app = FastAPI(lifespan=lifespan)
 
@@ -81,6 +87,7 @@ def server():
             builder=request.app.state.builder,
             registry=request.app.state.registry,
             vector=request.app.state.vector,
+            safety=request.app.state.safety,
         )
 
     @app.get("/health")

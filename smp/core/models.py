@@ -50,7 +50,19 @@ class Language(enum.StrEnum):
     """Supported source languages."""
 
     PYTHON = "python"
+    JAVASCRIPT = "javascript"
     TYPESCRIPT = "typescript"
+    JAVA = "java"
+    C = "c"
+    CPP = "cpp"
+    CSHARP = "csharp"
+    GO = "go"
+    RUST = "rust"
+    PHP = "php"
+    SWIFT = "swift"
+    KOTLIN = "kotlin"
+    RUBY = "ruby"
+    MATLAB = "matlab"
     UNKNOWN = "unknown"
 
 

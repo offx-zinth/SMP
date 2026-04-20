@@ -15,13 +15,32 @@ log = get_logger(__name__)
 
 _EXT_TO_LANG: dict[str, Language] = {
     ".py": Language.PYTHON,
+    ".js": Language.JAVASCRIPT,
+    ".mjs": Language.JAVASCRIPT,
+    ".cjs": Language.JAVASCRIPT,
     ".ts": Language.TYPESCRIPT,
     ".tsx": Language.TYPESCRIPT,
-    ".js": Language.TYPESCRIPT,
     ".jsx": Language.TYPESCRIPT,
+    ".java": Language.JAVA,
+    ".c": Language.C,
+    ".h": Language.C,
+    ".cpp": Language.CPP,
+    ".cc": Language.CPP,
+    ".cxx": Language.CPP,
+    ".hpp": Language.CPP,
+    ".hxx": Language.CPP,
+    ".cs": Language.CSHARP,
+    ".go": Language.GO,
+    ".rs": Language.RUST,
+    ".php": Language.PHP,
+    ".phtml": Language.PHP,
+    ".swift": Language.SWIFT,
+    ".kt": Language.KOTLIN,
+    ".kts": Language.KOTLIN,
+    ".rb": Language.RUBY,
+    ".m": Language.MATLAB,
 }
 
-# Extensions that use the TSX grammar variant
 _TSX_EXTS = {".tsx", ".jsx"}
 
 
