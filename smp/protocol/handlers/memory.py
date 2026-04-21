@@ -6,7 +6,7 @@ from typing import Any
 
 import msgspec
 
-from smp.core.models import BatchUpdateParams, ReindexParams, UpdateParams
+from smp.core.models import BatchUpdateParams, Language, ReindexParams, UpdateParams
 from smp.logging import get_logger
 from smp.protocol.handlers.base import MethodHandler
 
@@ -33,11 +33,17 @@ class UpdateHandler(MethodHandler):
 
         file_path = p.file_path
 
-        if p.content:
-            parser_obj = registry.get(p.language)
-            if not parser_obj:
-                from smp.core.models import Language
+        # Auto-detect language from file extension if not provided
+        language = p.language
+        if not language:
+            from smp.parser.base import detect_language
+            language = detect_language(file_path)
+            if language == Language.UNKNOWN:
+                language = Language.PYTHON
 
+        if p.content:
+            parser_obj = registry.get(language)
+            if not parser_obj:
                 parser_obj = registry.get(Language.PYTHON)
                 if not parser_obj:
                     return {"error": "No parser available"}

@@ -74,8 +74,10 @@ class RustParser(TreeSitterParser):
         edges: list[GraphEdge],
         seen_ids: set[str],
     ) -> None:
+        # DEBUG: print(f"Visiting: {node.type}")
         if node.type == "function_item":
             self._process_function(node, source, file_path, parent_id, nodes, edges, seen_ids)
+
         elif node.type == "struct_item":
             self._process_struct(node, source, file_path, parent_id, nodes, edges, seen_ids)
         elif node.type == "enum_item":

@@ -215,7 +215,7 @@ class UpdateParams(msgspec.Struct):
     file_path: str
     content: str = ""
     change_type: str = "modified"
-    language: Language = Language.PYTHON
+    language: Language | None = None
 
 
 class BatchUpdateParams(msgspec.Struct):

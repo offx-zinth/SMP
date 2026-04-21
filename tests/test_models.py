@@ -232,7 +232,7 @@ class TestQueryParams:
 
     def test_update_params(self) -> None:
         p = UpdateParams(file_path="test.py", content="x = 1")
-        assert p.language == Language.PYTHON
+        assert p.language is None
 
     def test_impact_params(self) -> None:
         p = ImpactParams(entity="x")
