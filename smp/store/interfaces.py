@@ -92,7 +92,7 @@ class GraphStore(abc.ABC):
     async def traverse(
         self,
         start_id: str,
-        edge_type: EdgeType,
+        edge_type: EdgeType | list[EdgeType],
         depth: int,
         max_nodes: int = 100,
         direction: str = "outgoing",

@@ -325,7 +325,9 @@ class DefaultQueryEngine(QueryEngineInterface):
         if not node:
             return {"error": f"Node {entity} not found"}
 
-        dependents = await self._graph.traverse(node.id, EdgeType.CALLS, depth=10, max_nodes=200, direction="incoming")
+        dependents = await self._graph.traverse(
+            node.id, [EdgeType.CALLS, EdgeType.CALLS_RUNTIME, EdgeType.DEPENDS_ON], depth=10, max_nodes=200, direction="incoming"
+        )
 
         affected_files: list[str] = []
         affected_functions: list[str] = []
@@ -477,7 +479,18 @@ class DefaultQueryEngine(QueryEngineInterface):
         if not start_node or not end_node:
             return {"path": [], "data_transformations": []}
 
-        paths = await self._bfs_paths(start, end)
+        # Define edge types based on flow_type
+        if flow_type == "data" or flow_type == "control":
+            edges_to_follow = [EdgeType.CALLS, EdgeType.CALLS_RUNTIME]
+            direction = "outgoing"
+        elif flow_type == "dependency":
+            edges_to_follow = [EdgeType.DEPENDS_ON, EdgeType.IMPORTS]
+            direction = "outgoing"
+        else:
+            edges_to_follow = [EdgeType.CALLS]
+            direction = "outgoing"
+
+        paths = await self._bfs_paths(start_node.id, end_node.id, edges_to_follow, direction)
         if not paths:
             return {"path": [], "data_transformations": []}
 
@@ -497,8 +510,14 @@ class DefaultQueryEngine(QueryEngineInterface):
             "data_transformations": transformations,
         }
 
-    async def _bfs_paths(self, start_id: str, end_id: str) -> list[list[str]]:
-        """BFS to find shortest paths."""
+    async def _bfs_paths(
+        self,
+        start_id: str,
+        end_id: str,
+        edge_types: list[EdgeType],
+        direction: str = "outgoing",
+    ) -> list[list[str]]:
+        """BFS to find shortest paths following specific edge types."""
         found_paths: list[list[str]] = []
         queue: deque[tuple[str, list[str]]] = deque([(start_id, [start_id])])
         visited: set[str] = set()
@@ -508,11 +527,15 @@ class DefaultQueryEngine(QueryEngineInterface):
             if len(path) > 20:
                 continue
 
-            edges = await self._graph.get_edges(current, direction="outgoing")
-            edges += await self._graph.get_edges(current, direction="incoming")
+            edges = await self._graph.get_edges(
+                current, edge_type=None, direction=direction
+            )
+            
+            # Filter edges by type
+            filtered_edges = [e for e in edges if e.type in edge_types]
 
             neighbors: set[str] = set()
-            for e in edges:
+            for e in filtered_edges:
                 neighbors.add(e.target_id if e.source_id == current else e.source_id)
 
             for neighbor in neighbors:

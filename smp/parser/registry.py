@@ -27,10 +27,58 @@ class ParserRegistry:
             from smp.parser.python_parser import PythonParser
 
             parser = PythonParser()
+        elif language == Language.JAVASCRIPT:
+            from smp.parser.javascript_parser import JavaScriptParser
+
+            parser = JavaScriptParser()
         elif language == Language.TYPESCRIPT:
             from smp.parser.typescript_parser import TypeScriptParser
 
             parser = TypeScriptParser()
+        elif language == Language.JAVA:
+            from smp.parser.java_parser import JavaParser
+
+            parser = JavaParser()
+        elif language == Language.C:
+            from smp.parser.cpp_parser import CParser
+
+            parser = CParser()
+        elif language == Language.CPP:
+            from smp.parser.cpp_parser import CppParser
+
+            parser = CppParser()
+        elif language == Language.CSHARP:
+            from smp.parser.csharp_parser import CSharpParser
+
+            parser = CSharpParser()
+        elif language == Language.GO:
+            from smp.parser.go_parser import GoParser
+
+            parser = GoParser()
+        elif language == Language.RUST:
+            from smp.parser.rust_parser import RustParser
+
+            parser = RustParser()
+        elif language == Language.PHP:
+            from smp.parser.php_parser import PhpParser
+
+            parser = PhpParser()
+        elif language == Language.SWIFT:
+            from smp.parser.swift_parser import SwiftParser
+
+            parser = SwiftParser()
+        elif language == Language.KOTLIN:
+            from smp.parser.kotlin_parser import KotlinParser
+
+            parser = KotlinParser()
+        elif language == Language.RUBY:
+            from smp.parser.ruby_parser import RubyParser
+
+            parser = RubyParser()
+        elif language == Language.MATLAB:
+            from smp.parser.matlab_parser import MatlabParser
+
+            parser = MatlabParser()
 
         if parser:
             self._parsers[language] = parser

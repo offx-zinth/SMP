@@ -50,7 +50,19 @@ class Language(enum.StrEnum):
     """Supported source languages."""
 
     PYTHON = "python"
+    JAVASCRIPT = "javascript"
     TYPESCRIPT = "typescript"
+    JAVA = "java"
+    C = "c"
+    CPP = "cpp"
+    CSHARP = "csharp"
+    GO = "go"
+    RUST = "rust"
+    PHP = "php"
+    SWIFT = "swift"
+    KOTLIN = "kotlin"
+    RUBY = "ruby"
+    MATLAB = "matlab"
     UNKNOWN = "unknown"
 
 
@@ -203,7 +215,7 @@ class UpdateParams(msgspec.Struct):
     file_path: str
     content: str = ""
     change_type: str = "modified"
-    language: Language = Language.PYTHON
+    language: Language | None = None
 
 
 class BatchUpdateParams(msgspec.Struct):
