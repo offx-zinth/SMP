@@ -23,8 +23,14 @@ async def simulate_agent() -> None:
     async with app_lifespan() as state:
         ctx = MockCtx(request_context=MockRequestContext(lifespan_state=state))
         
+        # Clear graph to avoid interference from diagnostic tests
+        builder = state["builder"]
+        await builder._store._execute("MATCH (n) DETACH DELETE n")
+        print("\n🧹 Graph cleared for fresh simulation")
+        
         print("\n🤖 AGENT: Starting investigation into Rust core impact...")
         print("=" * 80)
+
 
         # 1. Ingest the eval project
         # We use absolute paths to be safe
@@ -64,11 +70,13 @@ async def simulate_agent() -> None:
         
         # Check if we found the link to api.py
         found_link = False
-        if isinstance(res_trace, list):
-            for node in res_trace:
+        trace_nodes = res_trace.get("nodes", []) if isinstance(res_trace, dict) else res_trace
+        if isinstance(trace_nodes, list):
+            for node in trace_nodes:
                 if "api.py" in node.get("file_path", ""):
                     found_link = True
                     break
+
         
         if found_link:
             print("✅ SUCCESS: I can see that changing 'compute_complex_metric' in core.rs affects 'handle_request' in api.py.")

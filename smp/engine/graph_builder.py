@@ -28,7 +28,8 @@ class DefaultGraphBuilder(GraphBuilderInterface):
             sig = node.structural.signature
             if "import" not in sig:
                 continue
-            module_path = node.structural.name.replace(".", "/") + ".py"
+            module_name = node.structural.name
+            module_path = module_name.replace(".", "/")
             if sig.strip().startswith("from"):
                 after_import = sig.split("import", 1)[1]
                 for raw_name in after_import.split(","):
@@ -66,8 +67,18 @@ class DefaultGraphBuilder(GraphBuilderInterface):
                     resolved_edges.append(edge)
                     continue
 
-                if entity_name in import_map:
-                    module_path, original_name = import_map[entity_name]
+                # Check if entity_name is a qualified name (e.g., module.function)
+                # and if the module prefix is in our import map
+                matched_module = None
+                original_name = entity_name
+                for module_alias, (module_path, module_orig) in import_map.items():
+                    if entity_name.startswith(f"{module_alias}."):
+                        matched_module = module_alias
+                        original_name = entity_name[len(module_alias) + 1 :]
+                        break
+
+                if matched_module:
+                    module_path, module_orig = import_map[matched_module]
                     target_id = await self._resolve_cross_file(
                         original_name,
                         module_path,
@@ -91,6 +102,20 @@ class DefaultGraphBuilder(GraphBuilderInterface):
                             original=original_name,
                             target=fallback,
                         )
+                elif entity_name in import_map:
+                    # Handle cases where the entity itself is the imported module
+                    module_path, original_name = import_map[entity_name]
+                    target_id = await self._resolve_cross_file(
+                        original_name,
+                        module_path,
+                    )
+                    if target_id:
+                        edge.target_id = target_id
+                        resolved_edges.append(edge)
+                    else:
+                        fallback = f"{module_path}::File::{original_name}::1"
+                        edge.target_id = fallback
+                        self._pending_edges.append((edge, original_name, module_path))
                 else:
                     resolved_edges.append(edge)
             else:
@@ -107,20 +132,43 @@ class DefaultGraphBuilder(GraphBuilderInterface):
         module_path: str,
     ) -> str | None:
         """Look up the actual node ID for a cross-file reference."""
+        log.info("resolving_cross_file", entity=entity_name, module=module_path)
         candidates = await self._store.find_nodes(name=entity_name)
+        log.info("resolve_candidates", count=len(candidates))
         if not candidates:
             return None
 
         if not module_path:
             return candidates[0].id
 
-        stem = module_path.rsplit("/", 1)[-1]
+        import os
+        module_stem = module_path.split("/")[-1]
 
         for n in candidates:
             if n.file_path == module_path:
+                log.info("resolve_match_exact", id=n.id)
                 return n.id
+            
+            filename = os.path.splitext(os.path.basename(n.file_path))[0]
+            if filename == module_stem:
+                log.info("resolve_match_stem", id=n.id, filename=filename, stem=module_stem)
+                return n.id
+
+        return candidates[0].id
+
+        # Get the base name of the module (e.g., 'core' from 'project/core')
+        module_stem = module_path.split("/")[-1]
+
         for n in candidates:
-            if n.file_path.endswith(stem):
+            # Exact match of file path
+            if n.file_path == module_path:
+                return n.id
+            
+            # Match filename without extension
+            # e.g., '/path/to/core.rs' -> 'core'
+            import os
+            filename = os.path.splitext(os.path.basename(n.file_path))[0]
+            if filename == module_stem:
                 return n.id
 
         return candidates[0].id

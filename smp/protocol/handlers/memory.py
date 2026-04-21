@@ -74,6 +74,8 @@ class UpdateHandler(MethodHandler):
             await builder.remove_document(file_path)
             await builder.ingest_document(doc)
 
+        await builder.resolve_pending_edges()
+
         return {
             "file_path": file_path,
             "nodes": len(doc.nodes),
