@@ -24,17 +24,20 @@ jobs:
       - name: Initialize uv venv
         run: uv venv
         
+      - name: Install ruff and mypy via uv
+        run: uv add --dev ruff mypy
+        
       - name: Install dependencies
         run: uv pip install -e ".[dev]"
         
       - name: Check formatting with ruff
-        run: ruff format --check .
+        run: . .venv/bin/activate && ruff format --check .
         
       - name: Lint with ruff
-        run: ruff check .
+        run: . .venv/bin/activate && ruff check .
         
       - name: Type check with mypy
-        run: mypy smp/
+        run: . .venv/bin/activate && mypy smp/
         
       - name: Run tests
         run: pytest tests/ -x --tb=short
