@@ -398,16 +398,23 @@ class Neo4jGraphStore(GraphStore):
         max_nodes: int = 100,
         direction: str = "outgoing",
     ) -> list[GraphNode]:
-        rel_type = edge_type.value
+        rel_types = edge_type if isinstance(edge_type, list) else [edge_type]
+        type_filter = " OR ".join([f":{et.value}" for et in rel_types])
+        if not rel_types:
+            type_filter = ""
+        else:
+            # Neo4j syntax for multiple relationship types: :TYPE1|:TYPE2
+            type_filter = f":{'|'.join([et.value for et in rel_types])}"
+
         if direction == "incoming":
             cypher = f"""
-            MATCH path = (start:{_ALL_LABEL} {{id: $id}})<-[r:{rel_type}*1..{depth}]-(node:{_ALL_LABEL})
+            MATCH path = (start:{_ALL_LABEL} {{id: $id}})<-[r{type_filter}*1..{depth}]-(node:{_ALL_LABEL})
             RETURN DISTINCT node
             LIMIT $max_nodes
             """
         else:
             cypher = f"""
-            MATCH path = (start:{_ALL_LABEL} {{id: $id}})-[r:{rel_type}*1..{depth}]->(node:{_ALL_LABEL})
+            MATCH path = (start:{_ALL_LABEL} {{id: $id}})-[r{type_filter}*1..{depth}]->(node:{_ALL_LABEL})
             RETURN DISTINCT node
             LIMIT $max_nodes
             """
@@ -519,6 +526,11 @@ class Neo4jGraphStore(GraphStore):
             conditions.append(f"node.type IN [{placeholders}]")
             for i, nt in enumerate(node_types):
                 params[f"nt{i}"] = nt
+        if tags:
+            tag_conditions = [f"node.semantic_tags CONTAINS $tag{i}" for i in range(len(tags))]
+            conditions.extend(tag_conditions)
+            for i, tag in enumerate(tags):
+                params[f"tag{i}"] = tag
 
         where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 

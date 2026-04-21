@@ -147,19 +147,22 @@ class SeedWalkEngine(QueryEngineInterface):
         for node in all_nodes:
             s = 0.0
             name_lower = node.structural.name.lower()
+            # Use partial matching for better recall
             if all(t in name_lower for t in terms):
                 s += 100.0
             elif any(t in name_lower for t in terms):
                 s += 50.0
+            
             if node.semantic.docstring:
                 doc_lower = node.semantic.docstring.lower()
                 if all(t in doc_lower for t in terms):
-                    s += 30.0
+                    s += 40.0
                 elif any(t in doc_lower for t in terms):
-                    s += 15.0
+                    s += 20.0
+            
             for tag in node.semantic.tags:
                 if any(t in tag.lower() for t in terms):
-                    s += 10.0
+                    s += 15.0
                     break
             if community_id and hasattr(node.semantic, "tags"):
                 pass
@@ -184,7 +187,7 @@ class SeedWalkEngine(QueryEngineInterface):
                         if s_item[1].get("node", None) and s_item[1]["node"].id == node_id:
                             found = True
                             break
-                    if not found and v_sim > 0.3:
+                    if not found and v_sim > 0.1:
                         gnode = await self._graph.get_node(node_id)
                         if gnode:
                             scored.append((v_sim * 80.0, {"node": gnode, "score": v_sim * 80.0}))

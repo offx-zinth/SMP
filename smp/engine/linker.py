@@ -151,14 +151,19 @@ class Linker:
         if not module_path:
             return candidates[0].id
 
+        # Strip extension to handle .py, .rs, .java, .ts, etc.
         stem = module_path.rsplit("/", 1)[-1]
+        stem_without_ext = stem.rsplit(".", 1)[0] if "." in stem else stem
 
         for n in candidates:
             if n.file_path == module_path:
                 return n.id
 
         for n in candidates:
-            if n.file_path.endswith(stem):
+            # Match on stem with or without extension
+            file_stem = n.file_path.rsplit("/", 1)[-1]
+            file_stem_without_ext = file_stem.rsplit(".", 1)[0] if "." in file_stem else file_stem
+            if n.file_path.endswith(stem) or file_stem_without_ext == stem_without_ext:
                 return n.id
 
         return candidates[0].id

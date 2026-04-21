@@ -16,6 +16,15 @@ log = get_logger(__name__)
 
 _LANGUAGE = ts.Language(tsr.language())
 
+_CALL_QUERY = ts.Query(
+    _LANGUAGE,
+    """
+(call_expression function: (identifier) @callee) @call
+(call_expression function: (scoped_identifier) @callee) @call
+(call_expression function: (field_expression) @callee) @call
+""",
+)
+
 
 class RustParser(TreeSitterParser):
     """Extract structural elements from Rust source."""
