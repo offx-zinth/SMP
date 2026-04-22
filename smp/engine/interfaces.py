@@ -59,6 +59,7 @@ class SemanticEnricher(abc.ABC):
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts."""
 
+
 class QueryEngine(abc.ABC):
     """High-level query interface over the memory store."""
 

@@ -25,9 +25,7 @@ class EmbeddingService:
         self._provider = provider
         self._api_key = api_key or os.environ.get("NVIDIA_NIM_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
         self._model = model or os.environ.get("EMBEDDING_MODEL", "nvidia/nv-embed-qa-4")
-        self._base_url = base_url or os.environ.get(
-            "EMBEDDING_BASE_URL", "https://integrate.api.nvidia.com/v1"
-        )
+        self._base_url = base_url or os.environ.get("EMBEDDING_BASE_URL", "https://integrate.api.nvidia.com/v1")
         self._dimension = dimension
         self._client: httpx.AsyncClient | None = None
 

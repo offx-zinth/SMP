@@ -312,7 +312,9 @@ class UpdateInput(BaseModel):
     file_path: str = Field(..., description="Path to the file to update")
     content: str = Field("", description="New content of the file. If empty, the file will be parsed from disk")
     change_type: str = Field("modified", description="Type of change ('modified', 'added', 'deleted')")
-    language: str | None = Field(None, description="Language of the file. If not specified, auto-detected from file extension")
+    language: str | None = Field(
+        None, description="Language of the file. If not specified, auto-detected from file extension"
+    )
 
 
 @mcp.tool(name="smp_update", annotations={"title": "Update File", "destructiveHint": True})

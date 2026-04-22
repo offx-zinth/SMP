@@ -15,7 +15,7 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 log = get_logger(__name__)
 
-DEFAULT_EXTENSIONS = (".py", ".ts", ".tsx", ".js", ".jsx")
+DEFAULT_EXTENSIONS = (".py", ".rs", ".java", ".ts", ".tsx", ".js", ".jsx")
 DEFAULT_MAX_FILE_SIZE = 1_000_000
 
 
