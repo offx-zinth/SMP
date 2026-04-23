@@ -256,6 +256,7 @@ class DefaultQueryEngine(QueryEngineInterface):
             "imports": [{"source": e.source_id, "target": e.target_id} for e in imports],
             "imported_by": [{"source": e.source_id, "target": e.target_id} for e in imported_by],
             "defines": defines_nodes,
+            "functions_defined": defines_nodes,
             "related_patterns": related_patterns,
             "entry_points": entry_points,
             "data_flow_in": data_flow_in,
