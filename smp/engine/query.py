@@ -347,7 +347,7 @@ class DefaultQueryEngine(QueryEngineInterface):
         if not node:
             return {"error": f"Node {entity} not found"}
 
-        impact_edge_types = [EdgeType.CALLS, EdgeType.CALLS_RUNTIME, EdgeType.DEPENDS_ON]
+        impact_edge_types = [EdgeType.CALLS, EdgeType.IMPORTS, EdgeType.DEFINES]
         dependents = await self._graph.traverse(
             node.id, impact_edge_types, depth=10, max_nodes=200, direction="incoming"
         )
@@ -504,13 +504,13 @@ class DefaultQueryEngine(QueryEngineInterface):
 
         # Define edge types based on flow_type
         if flow_type == "data" or flow_type == "control":
-            edges_to_follow = [EdgeType.CALLS, EdgeType.CALLS_RUNTIME]
+            edges_to_follow = [EdgeType.CALLS, EdgeType.DEFINES]
             direction = "outgoing"
         elif flow_type == "dependency":
-            edges_to_follow = [EdgeType.DEPENDS_ON, EdgeType.IMPORTS]
+            edges_to_follow = [EdgeType.IMPORTS, EdgeType.DEFINES]
             direction = "outgoing"
         else:
-            edges_to_follow = [EdgeType.CALLS]
+            edges_to_follow = [EdgeType.CALLS, EdgeType.DEFINES]
             direction = "outgoing"
 
         paths = await self._bfs_paths(start_node.id, end_node.id, edges_to_follow, direction)
@@ -543,13 +543,16 @@ class DefaultQueryEngine(QueryEngineInterface):
         """BFS to find shortest paths following specific edge types."""
         found_paths: list[list[str]] = []
         queue: deque[tuple[str, list[str]]] = deque([(start_id, [start_id])])
-        visited: set[str] = set()
+        visited: set[str] = {start_id}
+        max_depth = 10
+        max_paths = 5
 
-        while queue and len(found_paths) < 3:
+        while queue and len(found_paths) < max_paths:
             current, path = queue.popleft()
-            if len(path) > 20:
+            if len(path) > max_depth:
                 continue
 
+            # Get edges in the specified direction
             edges = await self._graph.get_edges(current, edge_type=None, direction=direction)
 
             # Filter edges by type
@@ -557,7 +560,19 @@ class DefaultQueryEngine(QueryEngineInterface):
 
             neighbors: set[str] = set()
             for e in filtered_edges:
-                neighbors.add(e.target_id if e.source_id == current else e.source_id)
+                # In outgoing direction, we follow source -> target
+                # In incoming direction, we follow target -> source
+                if direction == "outgoing":
+                    if e.source_id == current:
+                        neighbors.add(e.target_id)
+                    elif e.target_id == current:
+                        # Handle reverse edges if applicable
+                        neighbors.add(e.source_id)
+                else:  # incoming
+                    if e.target_id == current:
+                        neighbors.add(e.source_id)
+                    elif e.source_id == current:
+                        neighbors.add(e.target_id)
 
             for neighbor in neighbors:
                 if neighbor == end_id:

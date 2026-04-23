@@ -19,10 +19,10 @@ _LANGUAGE = ts.Language(tsr.language())
 _CALL_QUERY = ts.Query(
     _LANGUAGE,
     """
-(call_expression function: (identifier) @callee) @call
-(call_expression function: (scoped_identifier) @callee) @call
-(call_expression function: (field_expression) @callee) @call
-""",
+    (call_expression function: (identifier) @callee) @call
+    (call_expression function: (scoped_identifier) @callee) @call
+    (call_expression function: (field_expression) @callee) @call
+    """,
 )
 
 
@@ -84,7 +84,6 @@ class RustParser(TreeSitterParser):
         edges: list[GraphEdge],
         seen_ids: set[str],
     ) -> None:
-        # DEBUG: print(f"Visiting: {node.type}")
         if node.type == "function_item":
             self._process_function(node, source, file_path, parent_id, nodes, edges, seen_ids)
 
@@ -301,6 +300,36 @@ class RustParser(TreeSitterParser):
                         if sub.type == "function_item":
                             self._process_function(sub, source, file_path, node_id, nodes, edges, seen_ids)
 
+    def _process_use(
+        self,
+        use_node: ts.Node,
+        source: bytes,
+        file_path: str,
+        parent_id: str,
+        nodes: list[GraphNode],
+        edges: list[GraphEdge],
+    ) -> None:
+        """Basic implementation to prevent crash and capture imports."""
+        try:
+            text = node_text(use_node)
+            if "use " in text:
+                import_name = text.replace("use ", "").strip()
+                start, end = line_range(use_node)
+                node_id = make_node_id(file_path, NodeType.FILE, import_name, start)
+                
+                structural = StructuralProperties(
+                    name=import_name,
+                    file=file_path,
+                    start_line=start,
+                    end_line=end,
+                    lines=end - start + 1,
+                )
+                node = GraphNode(id=node_id, type=NodeType.FILE, file_path=file_path, structural=structural)
+                nodes.append(node)
+                edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.DEPENDS_ON))
+        except Exception as e:
+            log.debug("rust_use_error", error=str(e), file=file_path)
+
     def _extract_calls(
         self,
         body: ts.Node,
@@ -317,7 +346,6 @@ class RustParser(TreeSitterParser):
             if not callee_nodes:
                 continue
             callee_name = node_text(callee_nodes[0])
-            # Handle scoped identifiers like 'rust_engine::compute'
             if "::" in callee_name:
                 callee_name = callee_name.split("::")[-1]
 
