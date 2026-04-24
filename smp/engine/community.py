@@ -211,8 +211,10 @@ class CommunityDetector:
             b
             for b in self._bridges
             if any(
-                self._communities.get(b["from_community"], Community()).level == level,
-                self._communities.get(b["to_community"], Community()).level == level,
+                [
+                    self._communities.get(b["from_community"], Community()).level == level,
+                    self._communities.get(b["to_community"], Community()).level == level,
+                ]
             )
         ]
         filtered = [b for b in level_bridges if b.get("coupling_weight", 0) >= min_coupling]
@@ -244,9 +246,17 @@ class CommunityDetector:
         adjacency: dict[str, set[str]],
         resolution: float,
     ) -> dict[str, str]:
-        community: dict[str, int] = {}
-        for i, node in enumerate(nodes):
-            community[node.id] = i
+        # Initial assignments: each node in its own community
+        community: dict[str, int] = {node.id: i for i, node in enumerate(nodes)}
+
+        # Precompute degrees
+        degrees = {nid: len(neighbors) for nid, neighbors in adjacency.items()}
+        total_edges_sum = sum(degrees.values()) / 2
+        if total_edges_sum == 0:
+            return {node.id: f"comm_{i}" for i, node in enumerate(nodes)}
+
+        # Precompute community degrees (sum of degrees of nodes in the community)
+        comm_degrees: dict[int, float] = {i: float(degrees[node.id]) for i, node in enumerate(nodes)}
 
         improved = True
         iterations = 0
@@ -255,36 +265,42 @@ class CommunityDetector:
         while improved and iterations < max_iterations:
             improved = False
             iterations += 1
+
             for node in nodes:
                 nid = node.id
                 current_comm = community[nid]
+                ki = degrees[nid]
+                if ki == 0:
+                    continue
+
+                # Calculate weights to each neighboring community
                 neighbor_comms: dict[int, int] = defaultdict(int)
                 for neighbor_id in adjacency.get(nid, set()):
                     neighbor_comms[community[neighbor_id]] += 1
 
-                if not neighbor_comms:
-                    continue
+                # Remove node from its current community
+                comm_degrees[current_comm] -= ki
 
                 best_comm = current_comm
                 best_gain = 0.0
-                total_edges = sum(neighbor_comms.values())
-                ki = len(adjacency.get(nid, set()))
 
-                for comm, ki_comm in neighbor_comms.items():
-                    sigma_tot = sum(1 for n, c in community.items() if c == comm and n in adjacency)
-                    sigma_tot = max(sigma_tot, 1)
-                    gain = resolution * ki_comm - ki * sigma_tot / (2 * total_edges) if total_edges > 0 else 0
+                for comm, ki_in in neighbor_comms.items():
+                    # Modularity gain formula: Delta Q = ki_in - (sigma_tot * ki / (2m)) * resolution
+                    sigma_tot = comm_degrees.get(comm, 0.0)
+                    gain = ki_in - (sigma_tot * ki / (2 * total_edges_sum)) * resolution
+
                     if gain > best_gain:
                         best_gain = gain
                         best_comm = comm
 
+                # Move node to the best community
+                community[nid] = best_comm
+                comm_degrees[best_comm] = comm_degrees.get(best_comm, 0.0) + ki
+
                 if best_comm != current_comm:
-                    community[nid] = best_comm
                     improved = True
 
-        comm_map: dict[str, str] = {}
-        for nid, comm_id in community.items():
-            comm_map[nid] = f"comm_{comm_id}"
+        comm_map: dict[str, str] = {nid: f"comm_{cid}" for nid, cid in community.items()}
         return comm_map
 
     def _compute_modularity(

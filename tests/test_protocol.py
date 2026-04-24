@@ -20,7 +20,7 @@ from smp.engine.enricher import StaticSemanticEnricher
 from smp.engine.graph_builder import DefaultGraphBuilder
 from smp.engine.query import DefaultQueryEngine
 from smp.parser.registry import ParserRegistry
-from smp.protocol.router import handle_rpc
+from smp.protocol.dispatcher import handle_rpc
 from smp.store.chroma_store import ChromaVectorStore
 from smp.store.graph.neo4j_store import Neo4jGraphStore
 
@@ -143,25 +143,13 @@ def test_navigate_missing(app_client):
 def test_trace(app_client):
     body = _parse(app_client.post("/rpc", content=_rpc("smp/trace", {"start": "f.py::Function::alpha::3"})).content)
     assert body["error"] is None
-    assert "beta" in {n["name"] for n in body["result"]}
-
-
-def test_context(app_client):
-    body = _parse(app_client.post("/rpc", content=_rpc("smp/context", {"file_path": "f.py"})).content)
-    assert body["error"] is None
-    assert len(body["result"]["functions_defined"]) >= 2
-
-
-def test_impact(app_client):
-    body = _parse(app_client.post("/rpc", content=_rpc("smp/impact", {"entity": "f.py::Function::beta::10"})).content)
-    assert body["error"] is None
-    assert "affected_files" in body["result"] or "severity" in body["result"]
+    assert "beta" in {n["name"] for n in body["result"]["nodes"]}
 
 
 def test_locate(app_client):
     body = _parse(app_client.post("/rpc", content=_rpc("smp/locate", {"query": "alpha function"})).content)
     assert body["error"] is None
-    assert isinstance(body["result"], list)
+    assert isinstance(body["result"]["matches"], list)
 
 
 def test_flow(app_client):

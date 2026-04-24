@@ -312,7 +312,9 @@ class UpdateInput(BaseModel):
     file_path: str = Field(..., description="Path to the file to update")
     content: str = Field("", description="New content of the file. If empty, the file will be parsed from disk")
     change_type: str = Field("modified", description="Type of change ('modified', 'added', 'deleted')")
-    language: str | None = Field(None, description="Language of the file. If not specified, auto-detected from file extension")
+    language: str | None = Field(
+        None, description="Language of the file. If not specified, auto-detected from file extension"
+    )
 
 
 @mcp.tool(name="smp_update", annotations={"title": "Update File", "destructiveHint": True})
@@ -822,6 +824,291 @@ async def smp_telemetry(params: TelemetryInput, ctx: Any) -> Any:
     """
     state = ctx.request_context.lifespan_state
     return await _call_rpc("smp/telemetry", params.model_dump(), state)
+
+
+# --- Community Detection Tools ---
+
+
+class CommunityDetectInput(BaseModel):
+    """Input for community detection."""
+
+    resolutions: list[float] = Field(
+        default_factory=list, description="Resolution parameters for multi-resolution analysis"
+    )
+    relationship_types: list[str] = Field(default_factory=list, description="Types of relationships to consider")
+
+
+@mcp.tool(name="smp_community_detect", annotations={"title": "Detect Communities", "readOnlyHint": True})
+async def smp_community_detect(params: CommunityDetectInput, ctx: Any) -> Any:
+    """Detect communities and structural clusters in the codebase graph.
+
+    Args:
+        params (CommunityDetectInput): Community detection parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/community/detect", params.model_dump(), state)
+
+
+class CommunityListInput(BaseModel):
+    """Input for listing communities."""
+
+    level: int = Field(0, description="Community hierarchy level to list", ge=0)
+
+
+@mcp.tool(name="smp_community_list", annotations={"title": "List Communities", "readOnlyHint": True})
+async def smp_community_list(params: CommunityListInput, ctx: Any) -> Any:
+    """List all detected communities at a given hierarchy level.
+
+    Args:
+        params (CommunityListInput): List parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/community/list", params.model_dump(), state)
+
+
+class CommunityGetInput(BaseModel):
+    """Input for getting a specific community."""
+
+    community_id: str = Field(..., description="ID of the community to retrieve")
+    node_types: list[str] = Field(default_factory=list, description="Filter nodes by type")
+    include_bridges: bool = Field(True, description="Include bridge nodes connecting to other communities")
+
+
+@mcp.tool(name="smp_community_get", annotations={"title": "Get Community", "readOnlyHint": True})
+async def smp_community_get(params: CommunityGetInput, ctx: Any) -> Any:
+    """Get details of a specific community including member nodes.
+
+    Args:
+        params (CommunityGetInput): Community retrieval parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/community/get", params.model_dump(), state)
+
+
+class CommunityBoundariesInput(BaseModel):
+    """Input for analyzing community boundaries."""
+
+    level: int = Field(0, description="Hierarchy level for boundary analysis")
+    min_coupling: float = Field(0.5, description="Minimum coupling threshold for boundaries", ge=0.0, le=1.0)
+
+
+@mcp.tool(name="smp_community_boundaries", annotations={"title": "Analyze Boundaries", "readOnlyHint": True})
+async def smp_community_boundaries(params: CommunityBoundariesInput, ctx: Any) -> Any:
+    """Analyze boundaries and coupling between communities.
+
+    Args:
+        params (CommunityBoundariesInput): Boundary analysis parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/community/boundaries", params.model_dump(), state)
+
+
+# --- Diff, Plan & Conflict Tools ---
+
+
+class DiffInput(BaseModel):
+    """Input for comparing code snapshots."""
+
+    from_snapshot: str = Field(..., description="Starting snapshot or version identifier")
+    to_snapshot: str = Field(..., description="Ending snapshot or version identifier")
+    scope: str = Field("full", description="Scope of comparison ('full', 'affected_only')")
+
+
+@mcp.tool(name="smp_diff", annotations={"title": "Diff Snapshots", "readOnlyHint": True})
+async def smp_diff(params: DiffInput, ctx: Any) -> Any:
+    """Compare two code snapshots and identify changes (added, removed, modified).
+
+    Args:
+        params (DiffInput): Diff parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/diff", params.model_dump(), state)
+
+
+class PlanInput(BaseModel):
+    """Input for generating change plans."""
+
+    change_description: str = Field(..., description="Description of the intended changes")
+    target_file: str = Field(..., description="Primary file to modify")
+    change_type: str = Field("refactor", description="Type of change (refactor, feature, fix, docs)")
+    scope: str = Field("full", description="Scope of analysis for the plan")
+
+
+@mcp.tool(name="smp_plan", annotations={"title": "Plan Changes", "readOnlyHint": True})
+async def smp_plan(params: PlanInput, ctx: Any) -> Any:
+    """Generate a structured plan for code changes with impact analysis.
+
+    Args:
+        params (PlanInput): Planning parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/plan", params.model_dump(), state)
+
+
+class ConflictInput(BaseModel):
+    """Input for conflict detection and analysis."""
+
+    entity: str = Field(..., description="Entity that might have conflicts")
+    proposed_change: str = Field(..., description="Description of the proposed modification")
+    context: str = Field("", description="Additional context about the change")
+
+
+@mcp.tool(name="smp_conflict", annotations={"title": "Detect Conflicts", "readOnlyHint": True})
+async def smp_conflict(params: ConflictInput, ctx: Any) -> Any:
+    """Detect potential conflicts and inconsistencies in proposed changes.
+
+    Args:
+        params (ConflictInput): Conflict analysis parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/conflict", params.model_dump(), state)
+
+
+# --- Merkle & Sync Tools ---
+
+
+class MerkleTreeInput(BaseModel):
+    """Input for Merkle tree operations."""
+
+    action: str = Field("verify", description="Action to perform ('verify', 'compute', 'status')")
+    scope: str = Field("full", description="Scope for the operation")
+
+
+@mcp.tool(name="smp_merkle_tree", annotations={"title": "Merkle Tree", "readOnlyHint": True})
+async def smp_merkle_tree(params: MerkleTreeInput, ctx: Any) -> Any:
+    """Verify integrity or compute Merkle tree for code graph sections.
+
+    Args:
+        params (MerkleTreeInput): Merkle tree parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/merkle/tree", params.model_dump(), state)
+
+
+class SyncInput(BaseModel):
+    """Input for synchronization operations."""
+
+    action: str = Field("verify", description="Sync action ('verify', 'reconcile', 'status')")
+    scope: str = Field("full", description="Scope to synchronize")
+
+
+@mcp.tool(name="smp_sync", annotations={"title": "Sync Graph", "readOnlyHint": True})
+async def smp_sync(params: SyncInput, ctx: Any) -> Any:
+    """Synchronize and reconcile the graph with source code on disk.
+
+    Args:
+        params (SyncInput): Sync parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/sync", params.model_dump(), state)
+
+
+class IndexExportInput(BaseModel):
+    """Input for exporting the Merkle index."""
+
+    format: str = Field("json", description="Export format (json, msgpack)")
+
+
+@mcp.tool(name="smp_index_export", annotations={"title": "Export Index", "destructiveHint": False})
+async def smp_index_export(params: IndexExportInput, ctx: Any) -> Any:
+    """Export the Merkle index for backup or transfer.
+
+    Args:
+        params (IndexExportInput): Export parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/index/export", params.model_dump(), state)
+
+
+class IndexImportInput(BaseModel):
+    """Input for importing a Merkle index."""
+
+    data: dict[str, Any] = Field(..., description="Index data to import")
+    merge: bool = Field(False, description="Whether to merge with existing index")
+
+
+@mcp.tool(name="smp_index_import", annotations={"title": "Import Index", "destructiveHint": True})
+async def smp_index_import(params: IndexImportInput, ctx: Any) -> Any:
+    """Import a previously exported Merkle index.
+
+    Args:
+        params (IndexImportInput): Import parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/index/import", params.model_dump(), state)
+
+
+# --- Additional Session & Telemetry Tools ---
+
+
+class SessionRecoverInput(BaseModel):
+    """Input for session recovery."""
+
+    session_id: str = Field(..., description="ID of the session to recover")
+
+
+@mcp.tool(name="smp_session_recover", annotations={"title": "Recover Session", "destructiveHint": False})
+async def smp_session_recover(params: SessionRecoverInput, ctx: Any) -> Any:
+    """Recover a session from audit logs or checkpoints.
+
+    Args:
+        params (SessionRecoverInput): Session recovery parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/session/recover", params.model_dump(), state)
+
+
+class TelemetryHotInput(BaseModel):
+    """Input for getting hot paths."""
+
+    threshold: int = Field(5, description="Access count threshold for identifying hot paths")
+
+
+@mcp.tool(name="smp_telemetry_hot", annotations={"title": "Hot Paths", "readOnlyHint": True})
+async def smp_telemetry_hot(params: TelemetryHotInput, ctx: Any) -> Any:
+    """Identify hot paths in the code graph based on access patterns.
+
+    Args:
+        params (TelemetryHotInput): Hot path parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/telemetry/hot", params.model_dump(), state)
+
+
+class TelemetryNodeInput(BaseModel):
+    """Input for getting node-specific telemetry."""
+
+    node_id: str = Field(..., description="ID of the node to query")
+
+
+@mcp.tool(name="smp_telemetry_node", annotations={"title": "Node Telemetry", "readOnlyHint": True})
+async def smp_telemetry_node(params: TelemetryNodeInput, ctx: Any) -> Any:
+    """Get telemetry data for a specific node (access counts, performance metrics).
+
+    Args:
+        params (TelemetryNodeInput): Node telemetry parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/telemetry/node", params.model_dump(), state)
+
+
+class TelemetryRecordInput(BaseModel):
+    """Input for recording telemetry events."""
+
+    node_id: str = Field(..., description="Node being accessed")
+    event_type: str = Field("access", description="Type of event (access, compute, modify)")
+    metadata: dict[str, Any] = Field(default_factory=dict, description="Additional event metadata")
+
+
+@mcp.tool(name="smp_telemetry_record", annotations={"title": "Record Event", "destructiveHint": True})
+async def smp_telemetry_record(params: TelemetryRecordInput, ctx: Any) -> Any:
+    """Record a telemetry event in the telemetry engine.
+
+    Args:
+        params (TelemetryRecordInput): Event recording parameters.
+    """
+    state = ctx.request_context.lifespan_state
+    return await _call_rpc("smp/telemetry/record", params.model_dump(), state)
 
 
 # --- System Resources ---

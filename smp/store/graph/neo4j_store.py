@@ -544,6 +544,24 @@ class Neo4jGraphStore(GraphStore):
 
         records = await self._execute(cypher, params)
 
+        # Fallback to CONTAINS search if fulltext returns empty results
+        if not records and query_terms:
+            fallback_conditions = []
+            fallback_params: dict[str, Any] = {"limit": top_k}
+            for i, term in enumerate(query_terms):
+                fallback_params[f"term{i}"] = term
+            for i, _ in enumerate(query_terms):
+                fallback_conditions.append(f"(node.id CONTAINS $term{i} OR node.file_path CONTAINS $term{i})")
+            match_op = " OR " if match == "any" else " AND "
+            fallback_where = match_op.join(fallback_conditions)
+            fallback_cypher = f"""
+            MATCH (node:{_ALL_LABEL})
+            WHERE {fallback_where}
+            RETURN node, 0.0 AS score
+            LIMIT $limit
+            """
+            records = await self._execute(fallback_cypher, fallback_params)
+
         results: list[dict[str, Any]] = []
         for rec in records:
             node_data = dict(rec["node"])

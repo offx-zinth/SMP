@@ -142,13 +142,14 @@ class DefaultGraphBuilder(GraphBuilderInterface):
             return candidates[0].id
 
         import os
+
         module_stem = module_path.split("/")[-1]
 
         for n in candidates:
             if n.file_path == module_path:
                 log.info("resolve_match_exact", id=n.id)
                 return n.id
-            
+
             filename = os.path.splitext(os.path.basename(n.file_path))[0]
             if filename == module_stem:
                 log.info("resolve_match_stem", id=n.id, filename=filename, stem=module_stem)
@@ -163,10 +164,11 @@ class DefaultGraphBuilder(GraphBuilderInterface):
             # Exact match of file path
             if n.file_path == module_path:
                 return n.id
-            
+
             # Match filename without extension
             # e.g., '/path/to/core.rs' -> 'core'
             import os
+
             filename = os.path.splitext(os.path.basename(n.file_path))[0]
             if filename == module_stem:
                 return n.id

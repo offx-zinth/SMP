@@ -374,7 +374,7 @@ class AuditGetParams(msgspec.Struct):
 class NavigateParams(msgspec.Struct):
     """Parameters for smp/navigate."""
 
-    query: str = ""
+    query: str
     include_relationships: bool = True
 
 

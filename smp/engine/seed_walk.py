@@ -152,14 +152,14 @@ class SeedWalkEngine(QueryEngineInterface):
                 s += 100.0
             elif any(t in name_lower for t in terms):
                 s += 50.0
-            
+
             if node.semantic.docstring:
                 doc_lower = node.semantic.docstring.lower()
                 if all(t in doc_lower for t in terms):
                     s += 40.0
                 elif any(t in doc_lower for t in terms):
                     s += 20.0
-            
+
             for tag in node.semantic.tags:
                 if any(t in tag.lower() for t in terms):
                     s += 15.0

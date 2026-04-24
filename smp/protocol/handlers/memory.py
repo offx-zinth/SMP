@@ -37,6 +37,7 @@ class UpdateHandler(MethodHandler):
         language = p.language
         if not language:
             from smp.parser.base import detect_language
+
             language = detect_language(file_path)
             if language == Language.UNKNOWN:
                 language = Language.PYTHON

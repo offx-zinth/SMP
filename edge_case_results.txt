@@ -1,0 +1,89 @@
+[2m2026-04-22T17:23:55.915073Z[0m [[32m[1minfo     [0m] [1mneo4j_connected               [0m [[0m[1m[34msmp.store.graph.neo4j_store[0m][0m [36muri[0m=[35mbolt://localhost:7687[0m
+Received notification from DBMS server: <GqlStatusObject gql_status='01N51', status_description='warn: relationship type does not exist. The relationship type `CALLS_RUNTIME` does not exist. Verify that the spelling is correct.', position=<SummaryInputPosition line=2, column=62, offset=62>, raw_classification='UNRECOGNIZED', classification=<NotificationClassification.UNRECOGNIZED: 'UNRECOGNIZED'>, raw_severity='WARNING', severity=<NotificationSeverity.WARNING: 'WARNING'>, diagnostic_record={'_classification': 'UNRECOGNIZED', '_severity': 'WARNING', '_position': {'offset': 62, 'line': 2, 'column': 62}, 'OPERATION': '', 'OPERATION_CODE': '0', 'CURRENT_SCHEMA': '/'}> for query: '\n            MATCH path = (start:SMPNode {id: $id})<-[r:CALLS|CALLS_RUNTIME|DEPENDS_ON*1..10]-(node:SMPNode)\n            RETURN DISTINCT node\n            LIMIT $max_nodes\n            '
+Received notification from DBMS server: <GqlStatusObject gql_status='01N51', status_description='warn: relationship type does not exist. The relationship type `CALLS_RUNTIME` does not exist. Verify that the spelling is correct.', position=<SummaryInputPosition line=2, column=62, offset=62>, raw_classification='UNRECOGNIZED', classification=<NotificationClassification.UNRECOGNIZED: 'UNRECOGNIZED'>, raw_severity='WARNING', severity=<NotificationSeverity.WARNING: 'WARNING'>, diagnostic_record={'_classification': 'UNRECOGNIZED', '_severity': 'WARNING', '_position': {'offset': 62, 'line': 2, 'column': 62}, 'OPERATION': '', 'OPERATION_CODE': '0', 'CURRENT_SCHEMA': '/'}> for query: '\n            MATCH path = (start:SMPNode {id: $id})<-[r:CALLS|CALLS_RUNTIME|DEPENDS_ON*1..10]-(node:SMPNode)\n            RETURN DISTINCT node\n            LIMIT $max_nodes\n            '
+Received notification from DBMS server: <GqlStatusObject gql_status='01N51', status_description='warn: relationship type does not exist. The relationship type `CALLS_RUNTIME` does not exist. Verify that the spelling is correct.', position=<SummaryInputPosition line=2, column=62, offset=62>, raw_classification='UNRECOGNIZED', classification=<NotificationClassification.UNRECOGNIZED: 'UNRECOGNIZED'>, raw_severity='WARNING', severity=<NotificationSeverity.WARNING: 'WARNING'>, diagnostic_record={'_classification': 'UNRECOGNIZED', '_severity': 'WARNING', '_position': {'offset': 62, 'line': 2, 'column': 62}, 'OPERATION': '', 'OPERATION_CODE': '0', 'CURRENT_SCHEMA': '/'}> for query: '\n            MATCH path = (start:SMPNode {id: $id})<-[r:CALLS|CALLS_RUNTIME|DEPENDS_ON*1..10]-(node:SMPNode)\n            RETURN DISTINCT node\n            LIMIT $max_nodes\n            '
+Received notification from DBMS server: <GqlStatusObject gql_status='01N51', status_description='warn: relationship type does not exist. The relationship type `CALLS_RUNTIME` does not exist. Verify that the spelling is correct.', position=<SummaryInputPosition line=2, column=62, offset=62>, raw_classification='UNRECOGNIZED', classification=<NotificationClassification.UNRECOGNIZED: 'UNRECOGNIZED'>, raw_severity='WARNING', severity=<NotificationSeverity.WARNING: 'WARNING'>, diagnostic_record={'_classification': 'UNRECOGNIZED', '_severity': 'WARNING', '_position': {'offset': 62, 'line': 2, 'column': 62}, 'OPERATION': '', 'OPERATION_CODE': '0', 'CURRENT_SCHEMA': '/'}> for query: '\n            MATCH path = (start:SMPNode {id: $id})<-[r:CALLS|CALLS_RUNTIME|DEPENDS_ON*1..10]-(node:SMPNode)\n            RETURN DISTINCT node\n            LIMIT $max_nodes\n            '
+Received notification from DBMS server: <GqlStatusObject gql_status='01N51', status_description='warn: relationship type does not exist. The relationship type `CALLS_RUNTIME` does not exist. Verify that the spelling is correct.', position=<SummaryInputPosition line=2, column=62, offset=62>, raw_classification='UNRECOGNIZED', classification=<NotificationClassification.UNRECOGNIZED: 'UNRECOGNIZED'>, raw_severity='WARNING', severity=<NotificationSeverity.WARNING: 'WARNING'>, diagnostic_record={'_classification': 'UNRECOGNIZED', '_severity': 'WARNING', '_position': {'offset': 62, 'line': 2, 'column': 62}, 'OPERATION': '', 'OPERATION_CODE': '0', 'CURRENT_SCHEMA': '/'}> for query: '\n            MATCH path = (start:SMPNode {id: $id})<-[r:CALLS|CALLS_RUNTIME|DEPENDS_ON*1..10]-(node:SMPNode)\n            RETURN DISTINCT node\n            LIMIT $max_nodes\n            '
+Received notification from DBMS server: <GqlStatusObject gql_status='01N51', status_description='warn: relationship type does not exist. The relationship type `CALLS_RUNTIME` does not exist. Verify that the spelling is correct.', position=<SummaryInputPosition line=2, column=62, offset=62>, raw_classification='UNRECOGNIZED', classification=<NotificationClassification.UNRECOGNIZED: 'UNRECOGNIZED'>, raw_severity='WARNING', severity=<NotificationSeverity.WARNING: 'WARNING'>, diagnostic_record={'_classification': 'UNRECOGNIZED', '_severity': 'WARNING', '_position': {'offset': 62, 'line': 2, 'column': 62}, 'OPERATION': '', 'OPERATION_CODE': '0', 'CURRENT_SCHEMA': '/'}> for query: '\n            MATCH path = (start:SMPNode {id: $id})<-[r:CALLS|CALLS_RUNTIME|DEPENDS_ON*1..10]-(node:SMPNode)\n            RETURN DISTINCT node\n            LIMIT $max_nodes\n            '
+[2m2026-04-22T17:23:57.387034Z[0m [[32m[1minfo     [0m] [1mneo4j_closed                  [0m [[0m[1m[34msmp.store.graph.neo4j_store[0m][0m
+
+================================================================================
+RUNNING COMPREHENSIVE EDGE CASE TEST SUITE
+================================================================================
+
+
+================================================================================
+TEST RESULTS REPORT
+================================================================================
+
+Total Tests: 40
+Passed: 40
+Failed: 0
+Pass Rate: 100.0%
+
+--------------------------------------------------------------------------------
+RESULTS BY CATEGORY
+--------------------------------------------------------------------------------
+
+Circular Dependencies: 3/3
+  ✓ Circular Dependency Detection
+  ✓ Circular B → A Reference
+  ✓ Circular Java Dependencies
+
+Deep Nesting: 3/3
+  ✓ Deep Call Chain (Level 5+) {'depth': 2}
+  ✓ Complex Calculation Chain {'call_count': 5}
+  ✓ Recursive Function Detection
+
+Diamond Patterns: 3/3
+  ✓ Diamond Pattern (Bottom) {'called_by_count': 1}
+  ✓ Multiple Callers (Diamond) {'caller_count': 2}
+  ✓ Diamond Impact Analysis {'affected': 4}
+
+Cross-Language: 4/4
+  ✓ Python to Rust Calls
+  ✓ Rust Core Functions
+  ✓ Java Integration Parsing
+  ✓ TypeScript Client Functions
+
+Search & Navigation: 5/5
+  ✓ Search by Keyword {'matches': 5}
+  ✓ Find Validation Functions {'found': 3}
+  ✓ Large Relationship Graph
+  ✓ Navigate Orphan Function
+  ✓ Flow Between Distant Nodes
+
+Impact Analysis: 4/4
+  ✓ Impact High-Degree Function {'affected': 8}
+  ✓ Impact Low-Degree Function {'severity': 'low'}
+  ✓ Impact Leaf Function
+  ✓ Impact with Entity Format
+
+Edge Cases: 8/8
+  ✓ Empty String Input
+  ✓ Nonexistent Function Search
+  ✓ Special Characters in Names
+  ✓ Long Function Names
+  ✓ Case Sensitivity
+  ✓ Flow to Self (Recursion)
+  ✓ Partial Name Matching {'matches': 5}
+  ✓ Multiple Keyword Search {'matches': 5}
+
+Performance: 5/5
+  ✓ Large Graph Traversal {'time_ms': 277.3315906524658}
+  ✓ Multiple Sequential Queries {'total_time_ms': 1440.0954246520996, 'avg_ms': 144.00954246520996}
+  ✓ Concurrent Queries {'time_ms': 985.9559535980225}
+  ✓ Large Flow Computation {'time_ms': 385.6053352355957}
+  ✓ Impact High Cardinality {'time_ms': 246.12736701965332}
+
+Language-Specific: 5/5
+  ✓ Rust Recursive Functions
+  ✓ Rust Self-Referencing Structs
+  ✓ Java Class Methods
+  ✓ TypeScript Async Functions
+  ✓ TypeScript Class Relationships
+
+================================================================================
+END OF REPORT
+================================================================================
+

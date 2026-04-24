@@ -168,7 +168,6 @@ class RpcDispatcher:
             HandoffApproveHandler,
             HandoffRejectHandler,
             HandoffPRHandler,
-
         ]:
             handler = handler_cls()
             self._handlers[handler.method] = handler

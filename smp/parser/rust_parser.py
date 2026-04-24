@@ -19,10 +19,10 @@ _LANGUAGE = ts.Language(tsr.language())
 _CALL_QUERY = ts.Query(
     _LANGUAGE,
     """
-(call_expression function: (identifier) @callee) @call
-(call_expression function: (scoped_identifier) @callee) @call
-(call_expression function: (field_expression) @callee) @call
-""",
+    (call_expression function: (identifier) @callee) @call
+    (call_expression function: (scoped_identifier) @callee) @call
+    (call_expression function: (field_expression) @callee) @call
+    """,
 )
 
 
@@ -62,6 +62,7 @@ class RustParser(TreeSitterParser):
         self._add_node(file_node, nodes, seen_ids)
 
         self._walk_tree(root_node, source_bytes, file_path, file_node.id, nodes, edges, seen_ids)
+        self._extract_calls(root_node, source_bytes, file_path, file_node.id, nodes, edges)
 
         log.debug("rust_parsed", file=file_path, nodes=len(nodes), edges=len(edges), errors=len(errors))
         return nodes, edges, errors
@@ -83,7 +84,6 @@ class RustParser(TreeSitterParser):
         edges: list[GraphEdge],
         seen_ids: set[str],
     ) -> None:
-        # DEBUG: print(f"Visiting: {node.type}")
         if node.type == "function_item":
             self._process_function(node, source, file_path, parent_id, nodes, edges, seen_ids)
 
@@ -142,6 +142,11 @@ class RustParser(TreeSitterParser):
         if not self._add_node(node, nodes, seen_ids):
             return
         edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.DEFINES))
+
+        # Extract calls within the function body
+        body = func.child_by_field_name("block")
+        if body:
+            self._extract_calls(body, source, file_path, node_id, nodes, edges)
 
     def _process_struct(
         self,
@@ -297,39 +302,64 @@ class RustParser(TreeSitterParser):
 
     def _process_use(
         self,
-        use: ts.Node,
+        use_node: ts.Node,
         source: bytes,
         file_path: str,
         parent_id: str,
         nodes: list[GraphNode],
         edges: list[GraphEdge],
     ) -> None:
-        start, end = line_range(use)
-        text = node_text(use).strip()
+        """Basic implementation to prevent crash and capture imports."""
+        try:
+            text = node_text(use_node)
+            if "use " in text:
+                import_name = text.replace("use ", "").strip()
+                start, end = line_range(use_node)
+                node_id = make_node_id(file_path, NodeType.FILE, import_name, start)
+                
+                structural = StructuralProperties(
+                    name=import_name,
+                    file=file_path,
+                    start_line=start,
+                    end_line=end,
+                    lines=end - start + 1,
+                )
+                node = GraphNode(id=node_id, type=NodeType.FILE, file_path=file_path, structural=structural)
+                nodes.append(node)
+                edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.DEPENDS_ON))
+        except Exception as e:
+            log.debug("rust_use_error", error=str(e), file=file_path)
 
-        module = ""
-        for child in use.children:
-            if child.type == "use_clause":
-                for sub in child.children:
-                    if sub.type == "identifier":
-                        module = node_text(sub)
-                        break
-                    if sub.type == "scoped_identifier":
-                        module = node_text(sub)
-                        break
+    def _extract_calls(
+        self,
+        body: ts.Node,
+        source: bytes,
+        file_path: str,
+        caller_id: str,
+        nodes: list[GraphNode],
+        edges: list[GraphEdge],
+    ) -> None:
+        cursor = ts.QueryCursor(_CALL_QUERY)
+        seen_edges: set[tuple[str, str]] = set()
+        for _, caps in cursor.matches(body):
+            callee_nodes = caps.get("callee")
+            if not callee_nodes:
+                continue
+            callee_name = node_text(callee_nodes[0])
+            if "::" in callee_name:
+                callee_name = callee_name.split("::")[-1]
 
-        if not module:
-            module = text
-
-        node_id = make_node_id(file_path, NodeType.FILE, module, start)
-        structural = StructuralProperties(
-            name=module,
-            file=file_path,
-            signature=text,
-            start_line=start,
-            end_line=end,
-            lines=end - start + 1,
-        )
-        node = GraphNode(id=node_id, type=NodeType.FILE, file_path=file_path, structural=structural)
-        nodes.append(node)
-        edges.append(GraphEdge(source_id=parent_id, target_id=node_id, type=EdgeType.IMPORTS))
+            start, _ = line_range(callee_nodes[0])
+            target_id = make_node_id(file_path, NodeType.FUNCTION, callee_name, 0)
+            edge_key = (caller_id, target_id)
+            if edge_key in seen_edges:
+                continue
+            seen_edges.add(edge_key)
+            edges.append(
+                GraphEdge(
+                    source_id=caller_id,
+                    target_id=target_id,
+                    type=EdgeType.CALLS,
+                    metadata={"line": str(start)},
+                )
+            )

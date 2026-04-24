@@ -256,6 +256,7 @@ class DefaultQueryEngine(QueryEngineInterface):
             "imports": [{"source": e.source_id, "target": e.target_id} for e in imports],
             "imported_by": [{"source": e.source_id, "target": e.target_id} for e in imported_by],
             "defines": defines_nodes,
+            "functions_defined": defines_nodes,
             "related_patterns": related_patterns,
             "entry_points": entry_points,
             "data_flow_in": data_flow_in,
@@ -301,18 +302,40 @@ class DefaultQueryEngine(QueryEngineInterface):
         return "module"
 
     async def assess_impact(self, entity: str, change_type: str = "delete") -> dict[str, Any]:
+        # Parse entity format: file_path:type:name (e.g., "api.py:fn:process")
+        target_name = entity
+        target_file = None
+        if ":" in entity:
+            parts = entity.rsplit(":", 2)
+            if len(parts) == 3:
+                target_file, _, target_name = parts
+            elif len(parts) == 2:
+                target_name = parts[1] if parts[0] in ("fn", "func", "function", "class", "struct", "file") else entity
+
+        node = None
+
+        # First try exact match
         node = await self._graph.get_node(entity)
 
-        # If exact match fails, try to find by file path or name
+        # If exact match fails, try to find by parsed file path or name
         if not node:
-            if "/" in entity or entity.endswith(".py"):
-                candidates = await self._graph.find_nodes(file_path=entity)
+            if target_file:
+                candidates = await self._graph.find_nodes(file_path=target_file)
+                for c in candidates:
+                    if c.structural and c.structural.name == target_name:
+                        node = c
+                        break
+            if not node:
+                candidates = await self._graph.find_nodes(name=target_name)
                 if candidates:
-                    node = candidates[0]
-            else:
-                candidates = await self._graph.find_nodes(name=entity)
-                if candidates:
-                    node = candidates[0]
+                    # Filter by file if we have target_file
+                    if target_file:
+                        for c in candidates:
+                            if c.file_path and target_file in c.file_path:
+                                node = c
+                                break
+                    if not node and candidates:
+                        node = candidates[0]
 
         # Try partial match if still not found
         if not node:
@@ -325,8 +348,9 @@ class DefaultQueryEngine(QueryEngineInterface):
         if not node:
             return {"error": f"Node {entity} not found"}
 
+        impact_edge_types = [EdgeType.CALLS, EdgeType.IMPORTS, EdgeType.DEFINES]
         dependents = await self._graph.traverse(
-            node.id, [EdgeType.CALLS, EdgeType.CALLS_RUNTIME, EdgeType.DEPENDS_ON], depth=10, max_nodes=200, direction="incoming"
+            node.id, impact_edge_types, depth=10, max_nodes=200, direction="incoming"
         )
 
         affected_files: list[str] = []
@@ -481,13 +505,13 @@ class DefaultQueryEngine(QueryEngineInterface):
 
         # Define edge types based on flow_type
         if flow_type == "data" or flow_type == "control":
-            edges_to_follow = [EdgeType.CALLS, EdgeType.CALLS_RUNTIME]
+            edges_to_follow = [EdgeType.CALLS, EdgeType.DEFINES]
             direction = "outgoing"
         elif flow_type == "dependency":
-            edges_to_follow = [EdgeType.DEPENDS_ON, EdgeType.IMPORTS]
+            edges_to_follow = [EdgeType.IMPORTS, EdgeType.DEFINES]
             direction = "outgoing"
         else:
-            edges_to_follow = [EdgeType.CALLS]
+            edges_to_follow = [EdgeType.CALLS, EdgeType.DEFINES]
             direction = "outgoing"
 
         paths = await self._bfs_paths(start_node.id, end_node.id, edges_to_follow, direction)
@@ -520,23 +544,36 @@ class DefaultQueryEngine(QueryEngineInterface):
         """BFS to find shortest paths following specific edge types."""
         found_paths: list[list[str]] = []
         queue: deque[tuple[str, list[str]]] = deque([(start_id, [start_id])])
-        visited: set[str] = set()
+        visited: set[str] = {start_id}
+        max_depth = 10
+        max_paths = 5
 
-        while queue and len(found_paths) < 3:
+        while queue and len(found_paths) < max_paths:
             current, path = queue.popleft()
-            if len(path) > 20:
+            if len(path) > max_depth:
                 continue
 
-            edges = await self._graph.get_edges(
-                current, edge_type=None, direction=direction
-            )
-            
+            # Get edges in the specified direction
+            edges = await self._graph.get_edges(current, edge_type=None, direction=direction)
+
             # Filter edges by type
             filtered_edges = [e for e in edges if e.type in edge_types]
 
             neighbors: set[str] = set()
             for e in filtered_edges:
-                neighbors.add(e.target_id if e.source_id == current else e.source_id)
+                # In outgoing direction, we follow source -> target
+                # In incoming direction, we follow target -> source
+                if direction == "outgoing":
+                    if e.source_id == current:
+                        neighbors.add(e.target_id)
+                    elif e.target_id == current:
+                        # Handle reverse edges if applicable
+                        neighbors.add(e.source_id)
+                else:  # incoming
+                    if e.target_id == current:
+                        neighbors.add(e.source_id)
+                    elif e.source_id == current:
+                        neighbors.add(e.target_id)
 
             for neighbor in neighbors:
                 if neighbor == end_id:
