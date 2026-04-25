@@ -1,0 +1,1 @@
+"""SMP benchmarks package."""

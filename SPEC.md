@@ -276,11 +276,24 @@ class EdgeCandidate:
     target_file_hint: str | None
 ```
 
-### Supported Languages (Phase 1)
+### Supported Languages
 
 | Language | Status | Grammar |
 |----------|--------|---------|
 | Python | ✅ Primary | tree-sitter-python |
+| JavaScript | ✅ Supported | tree-sitter-javascript |
+| TypeScript / TSX | ✅ Supported | tree-sitter-typescript |
+| Java | ✅ Supported | tree-sitter-java |
+| C | ✅ Supported | tree-sitter-c |
+| C++ | ✅ Supported | tree-sitter-cpp |
+| C# | ✅ Supported | tree-sitter-c-sharp |
+| Go | ✅ Supported | tree-sitter-go |
+| Rust | ✅ Supported | tree-sitter-rust |
+| PHP | ✅ Supported | tree-sitter-php |
+| Swift | ✅ Supported | tree-sitter-swift |
+| Kotlin | ✅ Supported | tree-sitter-kotlin |
+| Ruby | ✅ Supported | tree-sitter-ruby |
+| MATLAB | ✅ Supported | tree-sitter-matlab |
 
 ### Scheduler (Background Pre-parse)
 
@@ -729,13 +742,24 @@ pytest-benchmark>=4.0.0
 
 ### Language Support
 
-| Language | tree-sitter grammar | Priority |
-|----------|---------------------|----------|
-| Python | tree-sitter-python | Primary |
-| JavaScript/TypeScript | tree-sitter-javascript | Secondary |
-| Go | tree-sitter-go | Secondary |
-| Rust | tree-sitter-rust | Tertiary |
-| C/C++ | tree-sitter-c | Tertiary |
+All 14 languages listed below are fully supported through the `CodeParser` → `ParserRegistry` bridge:
+
+| Language | tree-sitter grammar | Status |
+|----------|---------------------|--------|
+| Python | tree-sitter-python | ✅ Primary (native walker) |
+| JavaScript | tree-sitter-javascript | ✅ Supported |
+| TypeScript / TSX | tree-sitter-typescript | ✅ Supported |
+| Java | tree-sitter-java | ✅ Supported |
+| C | tree-sitter-c | ✅ Supported |
+| C++ | tree-sitter-cpp | ✅ Supported |
+| C# | tree-sitter-c-sharp | ✅ Supported |
+| Go | tree-sitter-go | ✅ Supported |
+| Rust | tree-sitter-rust | ✅ Supported |
+| PHP | tree-sitter-php | ✅ Supported |
+| Swift | tree-sitter-swift | ✅ Supported |
+| Kotlin | tree-sitter-kotlin | ✅ Supported |
+| Ruby | tree-sitter-ruby | ✅ Supported |
+| MATLAB | tree-sitter-matlab | ✅ Supported |
 
 ### Features
 

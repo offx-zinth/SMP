@@ -3,10 +3,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
-
-if TYPE_CHECKING:
-    pass
+from typing import Any, Final
 
 try:
     import tree_sitter_languages
@@ -16,8 +13,10 @@ try:
 except ImportError:
     HAS_TREE_SITTER = False
 
-# Supported languages
 LANG_PYTHON: Final[str] = "python"
+LANG_UNKNOWN: Final[str] = "unknown"
+
+_PYTHON_EXTENSIONS: Final[set[str]] = {".py", ".pyw", ".pyi"}
 
 # Node types we care about for code graph
 INTERESTING_TYPES: Final[set[str]] = {
@@ -39,7 +38,7 @@ class ParsedNode:
     """A node extracted from source code."""
 
     node_id: str
-    type: str  # NodeType.value
+    type: str
     name: str
     signature: str
     docstring: str
@@ -56,7 +55,7 @@ class EdgeCandidate:
 
     source_id: str
     target_name: str
-    edge_type: str  # EdgeType.value
+    edge_type: str
     target_file_hint: str | None = None
 
 
@@ -70,41 +69,68 @@ class ParsedFile:
     content_hash: str
     nodes: list[ParsedNode] = field(default_factory=list)
     edge_candidates: list[EdgeCandidate] = field(default_factory=list)
+    resolved_edges: list[Any] = field(default_factory=list)
 
 
 class CodeParser:
-    """Wrapper around tree-sitter for parsing source code."""
+    """Wrapper around tree-sitter for parsing source code.
+
+    Only Python is parsed structurally; other extensions yield an empty
+    :class:`ParsedFile` so the graph store can still record file-level
+    bookkeeping without raising.  Multi-language support is a future
+    extension (see ``SPEC.md`` § Future Extensions).
+    """
 
     def __init__(self) -> None:
         if not HAS_TREE_SITTER:
             raise ImportError("tree-sitter not installed. Run: pip install tree-sitter-python")
         self._parsers: dict[str, Parser] = {}
         self._languages: dict[str, Language] = {}
-        self._load_language(LANG_PYTHON)
+        self._python_ready = False
 
-    def _load_language(self, lang: str) -> None:
-        """Load a tree-sitter language."""
-        if lang in self._languages:
+    def _ensure_python(self) -> None:
+        """Lazily load the Python tree-sitter grammar.
+
+        The legacy ``tree_sitter_languages`` bundle is tried first for
+        backwards compatibility; if it fails (version mismatch) we fall
+        back to the dedicated ``tree_sitter_python`` package.
+        """
+        if self._python_ready:
             return
 
-        lang_key = lang if lang != LANG_PYTHON else "python"
-        ts_lang = tree_sitter_languages.get_language(lang_key)
-        self._languages[lang] = ts_lang
+        loaded = False
+        try:
+            ts_lang = tree_sitter_languages.get_language("python")
+            parser = Parser()
+            if hasattr(parser, "language"):
+                parser.language = ts_lang
+            else:
+                parser.set_language(ts_lang)
+            self._languages[LANG_PYTHON] = ts_lang
+            self._parsers[LANG_PYTHON] = parser
+            loaded = True
+        except Exception:  # noqa: BLE001
+            pass
 
-        parser = Parser()
-        parser.language = ts_lang
-        self._parsers[lang] = parser
+        if not loaded:
+            try:
+                import tree_sitter as _ts
+                import tree_sitter_python as _tsp
 
-    def _detect_language(self, file_path: str | Path) -> str:
-        """Detect language from file extension."""
-        path = Path(file_path)
-        ext = path.suffix.lower()
-        lang_map = {
-            ".py": LANG_PYTHON,
-            ".pyw": LANG_PYTHON,
-            ".pyi": LANG_PYTHON,
-        }
-        return lang_map.get(ext, LANG_PYTHON)
+                ts_lang = _ts.Language(_tsp.language())
+                parser = _ts.Parser(ts_lang)
+                self._languages[LANG_PYTHON] = ts_lang
+                self._parsers[LANG_PYTHON] = parser
+                loaded = True
+            except Exception:  # noqa: BLE001
+                pass
+
+        self._python_ready = loaded
+
+    @staticmethod
+    def _is_python(file_path: str | Path) -> bool:
+        """Return True when the file should use the native Python walker."""
+        return Path(file_path).suffix.lower() in _PYTHON_EXTENSIONS
 
     def _compute_hash(self, content: bytes) -> str:
         """Compute hash of file content."""
@@ -115,32 +141,80 @@ class CodeParser:
         path_hash = hashlib.blake2b(Path(file_path).resolve().as_posix().encode(), digest_size=4).hexdigest()
         return f"{path_hash}::{node_type}::{name}::{start_line}"
 
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def parse_file(self, file_path: str | Path) -> ParsedFile:
-        """Parse a source file and extract nodes."""
+        """Parse a source file and extract nodes.
+
+        Python files use the built-in tree-sitter walker.  Files with other
+        extensions yield an empty :class:`ParsedFile` (no nodes / no edges).
+        """
         path = Path(file_path)
         if not path.exists():
             raise FileNotFoundError(f"File not found: {path}")
 
         content = path.read_bytes()
-        return self.parse_content(str(path), content)
+        if self._is_python(path):
+            return self._parse_python(str(path), content)
+
+        return self._empty_parsed_file(str(path), content)
 
     def parse_content(self, file_path: str, content: bytes) -> ParsedFile:
-        """Parse source content and extract nodes."""
-        lang = self._detect_language(file_path)
-        self._load_language(lang)
+        """Parse source content (bytes) and extract nodes.
 
-        parser = self._parsers[lang]
-        tree = parser.parse(content)
+        Non-Python content yields an empty :class:`ParsedFile`.
+        """
+        if self._is_python(file_path):
+            return self._parse_python(file_path, content)
+        return self._empty_parsed_file(file_path, content)
+
+    def parse(self, content: str | bytes, file_path: str) -> ParsedFile:
+        """Convenience overload accepting raw source text."""
+        if isinstance(content, str):
+            content = content.encode("utf-8")
+        return self.parse_content(file_path, content)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _empty_parsed_file(self, file_path: str, content: bytes) -> ParsedFile:
         text = content.decode("utf-8", errors="replace")
-        lines = text.splitlines()
-        line_count = len(lines)
+        return ParsedFile(
+            file_path=file_path,
+            language=LANG_UNKNOWN,
+            line_count=len(text.splitlines()),
+            content_hash=self._compute_hash(content),
+        )
 
+    # ------------------------------------------------------------------
+    # Python tree-sitter walker
+    # ------------------------------------------------------------------
+
+    def _parse_python(self, file_path: str, content: bytes) -> ParsedFile:
+        """Parse Python content using the native tree-sitter walker."""
+        self._ensure_python()
+
+        text = content.decode("utf-8", errors="replace")
+        line_count = len(text.splitlines())
         file_hash = self._compute_hash(content)
 
-        # Extract nodes
+        if LANG_PYTHON not in self._parsers:
+            return ParsedFile(
+                file_path=file_path,
+                language=LANG_PYTHON,
+                line_count=line_count,
+                content_hash=file_hash,
+            )
+
+        parser = self._parsers[LANG_PYTHON]
+        tree = parser.parse(content)
+
         nodes: list[ParsedNode] = []
         edge_candidates: list[EdgeCandidate] = []
-        scope_stack: list[tuple[str, int]] = []  # (node_id, end_line)
+        scope_stack: list[tuple[str, int]] = []
 
         self._walk_tree(
             tree.root_node,
@@ -149,12 +223,12 @@ class CodeParser:
             nodes,
             edge_candidates,
             scope_stack,
-            lang,
+            LANG_PYTHON,
         )
 
         return ParsedFile(
             file_path=file_path,
-            language=lang,
+            language=LANG_PYTHON,
             line_count=line_count,
             content_hash=file_hash,
             nodes=nodes,
@@ -174,27 +248,18 @@ class CodeParser:
         """Walk the tree and extract nodes."""
         node_type = node.type
 
-        # Handle function/method definitions
         if node_type in ("function_definition", "async_function_definition", "method"):
             self._handle_function(node, content, file_path, nodes, edge_candidates, scope_stack, lang)
-        # Handle class definitions
         elif node_type == "class":
             self._handle_class(node, content, file_path, nodes, scope_stack, lang)
-        # Handle imports
         elif node_type in ("import_statement", "import_from_statement"):
             self._handle_import(node, content, file_path, edge_candidates, scope_stack)
-        # Handle calls
         elif node_type == "call":
             self._handle_call(node, content, file_path, edge_candidates, scope_stack)
-        # Handle decorators
-        elif node_type == "decorator":
-            pass  # Handled by parent
 
-        # Recurse into children
         for child in node.children:
             self._walk_tree(child, content, file_path, nodes, edge_candidates, scope_stack, lang)
 
-        # Pop scope if needed
         if scope_stack and scope_stack[-1][1] == node.end_point[0]:
             scope_stack.pop()
 
@@ -209,7 +274,6 @@ class CodeParser:
         lang: str,
     ) -> None:
         """Extract a function/method definition."""
-        # Get function name
         name_node = node.child_by_field_name("name")
         if name_node is None:
             return
@@ -218,19 +282,14 @@ class CodeParser:
         start_line = node.start_point[0] + 1
         end_line = node.end_point[0] + 1
 
-        # Get signature
         param_node = node.child_by_field_name("parameters")
-        signature = ""
         if param_node:
             signature = content[param_node.start_byte : param_node.end_byte].decode("utf-8", errors="replace")
             signature = f"def {name}({signature})"
         else:
             signature = f"def {name}()"
 
-        # Get docstring
         docstring = self._extract_docstring(node, content)
-
-        # Get decorators
         decorators = self._extract_decorators(node, content)
 
         node_id = self._make_node_id(file_path, "Function", name, start_line)
@@ -246,14 +305,12 @@ class CodeParser:
             decorators=decorators,
         )
 
-        # Set parent from scope stack
         if scope_stack:
             parsed_node.parent_id = scope_stack[-1][0]
 
         nodes.append(parsed_node)
         scope_stack.append((node_id, end_line))
 
-        # Add IMPORTS edge for known library functions
         if lang == LANG_PYTHON:
             self._add_python_imports(node, content, file_path, node_id, edge_candidates)
 
@@ -267,6 +324,7 @@ class CodeParser:
         lang: str,
     ) -> None:
         """Extract a class definition."""
+        del lang
         name_node = node.child_by_field_name("name")
         if name_node is None:
             return
@@ -306,20 +364,16 @@ class CodeParser:
         scope_stack: list[tuple[str, int]],
     ) -> None:
         """Extract import statements."""
-        source_id = ""
         if scope_stack:
             source_id = scope_stack[-1][0]
         else:
-            # Module-level import
             path_hash = hashlib.blake2b(Path(file_path).resolve().as_posix().encode(), digest_size=4).hexdigest()
             source_id = f"{path_hash}::Module::module::1"
 
-        # Get imported names
         for child in node.children:
             if child.type == "identifier":
                 name = content[child.start_byte : child.end_byte].decode("utf-8", errors="replace")
                 if name and name[0].islower():
-                    # Likely a module name, not function
                     continue
                 edge_candidates.append(
                     EdgeCandidate(
@@ -339,17 +393,16 @@ class CodeParser:
         scope_stack: list[tuple[str, int]],
     ) -> None:
         """Extract function calls."""
+        del file_path
         if not scope_stack:
             return
 
         source_id = scope_stack[-1][0]
 
-        # Get function being called
         func_node = node.child_by_field_name("function")
         if func_node is None:
             return
 
-        # Follow attribute accesses (e.g., os.path.join)
         parts: list[str] = []
         current = func_node
         while current is not None:
@@ -361,13 +414,12 @@ class CodeParser:
                 if attr:
                     name = content[attr.start_byte : attr.end_byte].decode("utf-8", errors="replace")
                     parts.insert(0, name)
-                # Move to parent (object)
                 obj = current.child_by_field_name("object")
                 current = obj
                 continue
             else:
                 break
-            current = None  # Exit loop
+            current = None
 
         if parts:
             target_name = ".".join(parts)
@@ -382,7 +434,6 @@ class CodeParser:
 
     def _extract_docstring(self, node: Any, content: bytes) -> str:
         """Extract docstring from function/class body."""
-        # Look for string node as first child of body
         body = node.child_by_field_name("body")
         if body is None:
             return ""
@@ -392,7 +443,6 @@ class CodeParser:
             expr = first_stmt.child_by_field_name("expression")
             if expr and expr.type == "string":
                 doc = content[expr.start_byte : expr.end_byte].decode("utf-8", errors="replace")
-                # Remove quotes
                 for q in ('"""', "'''", '"', "'"):
                     doc = doc.strip(q)
                 return doc
@@ -400,12 +450,18 @@ class CodeParser:
         return ""
 
     def _extract_decorators(self, node: Any, content: bytes) -> list[str]:
-        """Extract decorators."""
+        """Extract decorators applied to ``node``.
+
+        Walks back through ``prev_sibling`` collecting any ``decorator`` nodes
+        that immediately precede the definition.
+        """
         decorators: list[str] = []
-        for child in node.prev_sibling:
-            if child.type == "decorator":
-                text = content[child.start_byte : child.end_byte].decode("utf-8", errors="replace")
-                decorators.append(text.strip())
+        sibling = node.prev_sibling
+        while sibling is not None and sibling.type == "decorator":
+            text = content[sibling.start_byte : sibling.end_byte].decode("utf-8", errors="replace")
+            decorators.append(text.strip())
+            sibling = sibling.prev_sibling
+        decorators.reverse()
         return decorators
 
     def _add_python_imports(
@@ -416,6 +472,5 @@ class CodeParser:
         node_id: str,
         edge_candidates: list[EdgeCandidate],
     ) -> None:
-        """Add standard library references."""
-        # This is a simplified version - full impl would use AST analysis
-        pass
+        """Add standard library references (no-op placeholder)."""
+        del node, content, file_path, node_id, edge_candidates

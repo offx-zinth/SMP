@@ -1,185 +1,213 @@
-"""Handler for enrichment methods (smp/enrich, smp/enrich/batch, etc.)."""
+"""Enrichment and annotation handlers (smp/enrich, smp/annotate, smp/tag).
+
+Each handler is a plain ``async def`` accepting ``(params, ctx)`` and
+returning a JSON-serialisable dict.  ``ctx`` is expected to provide a
+``graph`` (a :class:`~smp.store.interfaces.GraphStore`).
+"""
 
 from __future__ import annotations
 
+from collections import Counter
+from datetime import datetime, timezone
 from typing import Any
 
 import msgspec
 
 from smp.core.models import (
+    AnnotateBulkParams,
+    AnnotateParams,
     EnrichBatchParams,
     EnrichParams,
     EnrichStaleParams,
     EnrichStatusParams,
+    GraphNode,
+    SemanticProperties,
+    TagParams,
 )
-from smp.engine.enricher import _compute_source_hash
 from smp.logging import get_logger
-from smp.protocol.handlers.base import MethodHandler
 
 log = get_logger(__name__)
 
 
-class EnrichHandler(MethodHandler):
-    """Handles smp/enrich method."""
-
-    @property
-    def method(self) -> str:
-        return "smp/enrich"
-
-    async def handle(
-        self,
-        params: dict[str, Any],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        ep = msgspec.convert(params, EnrichParams)
-        engine = context["engine"]
-        enricher = context["enricher"]
-
-        node = await engine._graph.get_node(ep.node_id)
-        if not node:
-            raise ValueError(f"Node not found: {ep.node_id}")
-
-        enriched = await enricher.enrich_node(node, force=ep.force)
-        if enriched.semantic.source_hash and enriched.semantic.status == "enriched":
-            await engine._graph.upsert_node(enriched)
-
-        return {
-            "node_id": enriched.id,
-            "status": enriched.semantic.status,
-            "docstring": enriched.semantic.docstring,
-            "inline_comments": [{"line": c.line, "text": c.text} for c in enriched.semantic.inline_comments],
-            "decorators": enriched.semantic.decorators,
-            "annotations": {
-                "params": (enriched.semantic.annotations.params if enriched.semantic.annotations else {}),
-                "returns": (enriched.semantic.annotations.returns if enriched.semantic.annotations else None),
-                "throws": (enriched.semantic.annotations.throws if enriched.semantic.annotations else []),
-            }
-            if enriched.semantic.annotations
-            else {},
-            "tags": enriched.semantic.tags,
-            "source_hash": enriched.semantic.source_hash,
-            "enriched_at": enriched.semantic.enriched_at,
-        }
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
-class EnrichBatchHandler(MethodHandler):
-    """Handles smp/enrich/batch method."""
-
-    @property
-    def method(self) -> str:
-        return "smp/enrich/batch"
-
-    async def handle(
-        self,
-        params: dict[str, Any],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        ebp = msgspec.convert(params, EnrichBatchParams)
-        engine = context["engine"]
-        enricher = context["enricher"]
-
-        nodes = await engine._graph.find_nodes_by_scope(ebp.scope)
-        enriched_count = 0
-        skipped_count = 0
-        no_metadata_count = 0
-        no_metadata_nodes: list[str] = []
-
-        for node in nodes:
-            enriched = await enricher.enrich_node(node, force=ebp.force)
-            if enriched.semantic.status == "enriched":
-                enriched_count += 1
-                await engine._graph.upsert_node(enriched)
-            elif enriched.semantic.status == "skipped":
-                skipped_count += 1
-            elif enriched.semantic.status == "no_metadata":
-                no_metadata_count += 1
-                no_metadata_nodes.append(enriched.id)
-
-        return {
-            "enriched": enriched_count,
-            "skipped": skipped_count,
-            "no_metadata": no_metadata_count,
-            "failed": 0,
-            "no_metadata_nodes": no_metadata_nodes,
-        }
+def _replace_semantic(node: GraphNode, **changes: Any) -> GraphNode:
+    """Return a copy of *node* with ``semantic`` replaced via msgspec."""
+    new_semantic = msgspec.structs.replace(node.semantic, **changes)
+    return msgspec.structs.replace(node, semantic=new_semantic)
 
 
-class EnrichStaleHandler(MethodHandler):
-    """Handles smp/enrich/stale method."""
+async def enrich(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/enrich`` — mark a single node as enriched."""
+    p = msgspec.convert(params, EnrichParams)
+    graph = ctx["graph"]
 
-    @property
-    def method(self) -> str:
-        return "smp/enrich/stale"
+    node = await graph.get_node(p.node_id)
+    if node is None:
+        return {"node_id": p.node_id, "enriched": False, "error": "node_not_found"}
 
-    async def handle(
-        self,
-        params: dict[str, Any],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        esp = msgspec.convert(params, EnrichStaleParams)
-        engine = context["engine"]
+    if not p.force and node.semantic.status == "enriched":
+        return {"node_id": p.node_id, "enriched": False, "skipped": True, "reason": "already_enriched"}
 
-        nodes = await engine._graph.find_nodes_by_scope(esp.scope)
-        stale_nodes = []
-
-        for node in nodes:
-            if node.semantic.source_hash:
-                current = _compute_source_hash(
-                    node.structural.name,
-                    node.file_path,
-                    node.structural.start_line,
-                    node.structural.end_line,
-                    node.structural.signature,
-                )
-                if current != node.semantic.source_hash:
-                    stale_nodes.append(
-                        {
-                            "node_id": node.id,
-                            "file": node.file_path,
-                            "last_enriched": node.semantic.enriched_at,
-                            "current_hash": current,
-                            "enriched_hash": node.semantic.source_hash,
-                        }
-                    )
-
-        return {"stale_count": len(stale_nodes), "stale_nodes": stale_nodes}
+    updated = _replace_semantic(
+        node,
+        status="enriched",
+        enriched_at=_now_iso(),
+    )
+    await graph.upsert_node(updated)
+    return {"node_id": p.node_id, "enriched": True}
 
 
-class EnrichStatusHandler(MethodHandler):
-    """Handles smp/enrich/status method."""
+async def enrich_batch(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/enrich/batch`` — enrich all nodes within a scope."""
+    p = msgspec.convert(params, EnrichBatchParams)
+    graph = ctx["graph"]
 
-    @property
-    def method(self) -> str:
-        return "smp/enrich/status"
+    nodes = await graph.find_nodes_by_scope(p.scope) if p.scope and p.scope != "full" else await graph.find_nodes()
 
-    async def handle(
-        self,
-        params: dict[str, Any],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        estp = msgspec.convert(params, EnrichStatusParams)
-        engine = context["engine"]
+    enriched = 0
+    skipped = 0
+    timestamp = _now_iso()
+    for node in nodes:
+        if not p.force and node.semantic.status == "enriched":
+            skipped += 1
+            continue
+        updated = _replace_semantic(node, status="enriched", enriched_at=timestamp)
+        await graph.upsert_node(updated)
+        enriched += 1
 
-        nodes = await engine._graph.find_nodes_by_scope(estp.scope)
-        total = len(nodes)
-        has_docstring = sum(1 for n in nodes if n.semantic.docstring)
-        has_annotations = sum(
-            1
-            for n in nodes
-            if n.semantic.annotations and (n.semantic.annotations.params or n.semantic.annotations.returns)
+    return {"scope": p.scope, "enriched": enriched, "skipped": skipped, "total": len(nodes)}
+
+
+async def enrich_stale(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/enrich/stale`` — enrich nodes flagged as stale."""
+    p = msgspec.convert(params, EnrichStaleParams)
+    graph = ctx["graph"]
+
+    nodes = await graph.find_nodes_by_scope(p.scope) if p.scope and p.scope != "full" else await graph.find_nodes()
+
+    stale_statuses = {"no_metadata", "stale"}
+    timestamp = _now_iso()
+    enriched = 0
+    for node in nodes:
+        if node.semantic.status in stale_statuses:
+            updated = _replace_semantic(node, status="enriched", enriched_at=timestamp)
+            await graph.upsert_node(updated)
+            enriched += 1
+
+    return {"scope": p.scope, "enriched": enriched, "total": len(nodes)}
+
+
+async def enrich_status(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/enrich/status`` — count nodes grouped by enrichment status."""
+    p = msgspec.convert(params, EnrichStatusParams)
+    graph = ctx["graph"]
+
+    nodes = await graph.find_nodes_by_scope(p.scope) if p.scope and p.scope != "full" else await graph.find_nodes()
+
+    counts: Counter[str] = Counter(node.semantic.status or "no_metadata" for node in nodes)
+    return {
+        "scope": p.scope,
+        "total": len(nodes),
+        "by_status": dict(counts),
+    }
+
+
+async def annotate(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/annotate`` — set description and tags on a node."""
+    p = msgspec.convert(params, AnnotateParams)
+    graph = ctx["graph"]
+
+    node = await graph.get_node(p.node_id)
+    if node is None:
+        return {"node_id": p.node_id, "annotated": False, "error": "node_not_found"}
+
+    if not p.force and node.semantic.manually_set:
+        return {"node_id": p.node_id, "annotated": False, "skipped": True, "reason": "manually_set"}
+
+    merged_tags = list(dict.fromkeys([*node.semantic.tags, *p.tags]))
+    updated = _replace_semantic(
+        node,
+        description=p.description or node.semantic.description,
+        tags=merged_tags,
+        manually_set=True,
+        enriched_at=_now_iso(),
+    )
+    await graph.upsert_node(updated)
+    return {"node_id": p.node_id, "annotated": True, "tags": merged_tags}
+
+
+async def annotate_bulk(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/annotate/bulk`` — annotate multiple nodes in one request."""
+    bp = msgspec.convert(params, AnnotateBulkParams)
+    graph = ctx["graph"]
+
+    annotated = 0
+    missing: list[str] = []
+    for item in bp.annotations:
+        node = await graph.get_node(item.node_id)
+        if node is None:
+            missing.append(item.node_id)
+            continue
+        merged_tags = list(dict.fromkeys([*node.semantic.tags, *item.tags]))
+        updated = _replace_semantic(
+            node,
+            description=item.description or node.semantic.description,
+            tags=merged_tags,
+            manually_set=True,
+            enriched_at=_now_iso(),
         )
-        has_tags = sum(1 for n in nodes if n.semantic.tags)
-        manually_annotated = sum(1 for n in nodes if n.semantic.manually_set)
-        no_metadata = sum(1 for n in nodes if n.semantic.status == "no_metadata")
-        coverage = round((total - no_metadata) / total * 100, 1) if total > 0 else 0
+        await graph.upsert_node(updated)
+        annotated += 1
 
-        return {
-            "total_nodes": total,
-            "has_docstring": has_docstring,
-            "has_annotations": has_annotations,
-            "has_tags": has_tags,
-            "manually_annotated": manually_annotated,
-            "no_metadata": no_metadata,
-            "stale": 0,
-            "coverage_pct": coverage,
-        }
+    return {"annotated": annotated, "missing": missing, "total": len(bp.annotations)}
+
+
+async def tag(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/tag`` — add/remove/set tags across a scope."""
+    p = msgspec.convert(params, TagParams)
+    graph = ctx["graph"]
+
+    if p.scope and p.scope != "full":
+        nodes = await graph.find_nodes_by_scope(p.scope)
+    else:
+        nodes = await graph.find_nodes()
+
+    action = p.action.lower()
+    new_tags = list(p.tags)
+    updated_count = 0
+    for node in nodes:
+        existing: list[str] = list(node.semantic.tags)
+        if action == "add":
+            merged = list(dict.fromkeys([*existing, *new_tags]))
+        elif action == "remove":
+            removal = set(new_tags)
+            merged = [t for t in existing if t not in removal]
+        elif action == "set":
+            merged = list(dict.fromkeys(new_tags))
+        else:
+            merged = existing
+
+        if merged != existing:
+            await graph.upsert_node(_replace_semantic(node, tags=merged))
+            updated_count += 1
+
+    return {"scope": p.scope, "action": action, "updated": updated_count, "total": len(nodes)}
+
+
+__all__ = [
+    "annotate",
+    "annotate_bulk",
+    "enrich",
+    "enrich_batch",
+    "enrich_stale",
+    "enrich_status",
+    "tag",
+]
+
+
+# Keep ``SemanticProperties`` available for downstream consumers using
+# ``from smp.protocol.handlers.enrichment import *``.
+_ = SemanticProperties

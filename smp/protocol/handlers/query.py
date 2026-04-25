@@ -1,4 +1,9 @@
-"""Handler for query methods (smp/navigate, smp/trace, smp/context, etc.)."""
+"""Query method handlers (smp/navigate, smp/trace, smp/context, ...).
+
+Each handler is a plain ``async def`` accepting ``(params, ctx)`` and
+returning a JSON-serialisable dict.  ``ctx`` is expected to provide an
+``engine`` (a :class:`~smp.engine.query.DefaultQueryEngine`).
+"""
 
 from __future__ import annotations
 
@@ -16,127 +21,56 @@ from smp.core.models import (
     TraceParams,
 )
 from smp.logging import get_logger
-from smp.protocol.handlers.base import MethodHandler
 
 log = get_logger(__name__)
 
 
-class NavigateHandler(MethodHandler):
-    """Handles smp/navigate method."""
-
-    @property
-    def method(self) -> str:
-        return "smp/navigate"
-
-    async def handle(
-        self,
-        params: dict[str, Any],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        np_ = msgspec.convert(params, NavigateParams)
-        engine = context["engine"]
-        return await engine.navigate(np_.query, np_.include_relationships)
+async def navigate(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/navigate``."""
+    p = msgspec.convert(params, NavigateParams)
+    engine = ctx["engine"]
+    return await engine.navigate(p.query, p.include_relationships)
 
 
-class TraceHandler(MethodHandler):
-    """Handles smp/trace method."""
-
-    @property
-    def method(self) -> str:
-        return "smp/trace"
-
-    async def handle(
-        self,
-        params: dict[str, Any],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        trp = msgspec.convert(params, TraceParams)
-        engine = context["engine"]
-        result = await engine.trace(trp.start, trp.relationship, trp.depth, trp.direction)
-        return {"nodes": result}
+async def trace(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/trace``."""
+    p = msgspec.convert(params, TraceParams)
+    engine = ctx["engine"]
+    result = await engine.trace(p.start, p.relationship, p.depth, p.direction)
+    return {"nodes": result}
 
 
-class ContextHandler(MethodHandler):
-    """Handles smp/context method."""
-
-    @property
-    def method(self) -> str:
-        return "smp/context"
-
-    async def handle(
-        self,
-        params: dict[str, Any],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        ctp = msgspec.convert(params, ContextParams)
-        engine = context["engine"]
-        return await engine.get_context(ctp.file_path, ctp.scope, ctp.depth)
+async def context(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/context``."""
+    p = msgspec.convert(params, ContextParams)
+    engine = ctx["engine"]
+    return await engine.get_context(p.file_path, p.scope, p.depth)
 
 
-class ImpactHandler(MethodHandler):
-    """Handles smp/impact method."""
-
-    @property
-    def method(self) -> str:
-        return "smp/impact"
-
-    async def handle(
-        self,
-        params: dict[str, Any],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        imp = msgspec.convert(params, ImpactParams)
-        engine = context["engine"]
-        return await engine.assess_impact(imp.entity, imp.change_type)
+async def impact(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/impact``."""
+    p = msgspec.convert(params, ImpactParams)
+    engine = ctx["engine"]
+    return await engine.assess_impact(p.entity, p.change_type)
 
 
-class LocateHandler(MethodHandler):
-    """Handles smp/locate method."""
-
-    @property
-    def method(self) -> str:
-        return "smp/locate"
-
-    async def handle(
-        self,
-        params: dict[str, Any],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        loc = msgspec.convert(params, LocateParams)
-        engine = context["engine"]
-        result = await engine.locate(loc.query, loc.fields, loc.node_types, loc.top_k)
-        return {"matches": result}
+async def locate(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/locate``."""
+    p = msgspec.convert(params, LocateParams)
+    engine = ctx["engine"]
+    result = await engine.locate(p.query, p.fields, p.node_types, p.top_k)
+    return {"matches": result}
 
 
-class SearchHandler(MethodHandler):
-    """Handles smp/search method."""
-
-    @property
-    def method(self) -> str:
-        return "smp/search"
-
-    async def handle(
-        self,
-        params: dict[str, Any],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        sp = msgspec.convert(params, SearchParams)
-        engine = context["engine"]
-        return await engine.search(sp.query, sp.match, sp.filter, sp.top_k)
+async def search(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/search``."""
+    p = msgspec.convert(params, SearchParams)
+    engine = ctx["engine"]
+    return await engine.search(p.query, p.match, p.filter, p.top_k)
 
 
-class FlowHandler(MethodHandler):
-    """Handles smp/flow method."""
-
-    @property
-    def method(self) -> str:
-        return "smp/flow"
-
-    async def handle(
-        self,
-        params: dict[str, Any],
-        context: dict[str, Any],
-    ) -> dict[str, Any]:
-        fp = msgspec.convert(params, FlowParams)
-        engine = context["engine"]
-        return await engine.find_flow(fp.start, fp.end, fp.flow_type)
+async def flow(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/flow``."""
+    p = msgspec.convert(params, FlowParams)
+    engine = ctx["engine"]
+    return await engine.find_flow(p.start, p.end, p.flow_type)

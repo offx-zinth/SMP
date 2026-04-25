@@ -358,6 +358,8 @@ class LockParams(msgspec.Struct):
 
     session_id: str = ""
     files: list[str] = msgspec.field(default_factory=list)
+    ttl_seconds: int = 300
+    force: bool = False
 
 
 class AuditGetParams(msgspec.Struct):

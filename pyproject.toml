@@ -14,7 +14,6 @@ dependencies = [
     "msgspec>=0.19",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
-    "neo4j>=5.0",
     "httpx>=0.27",
     "tree-sitter>=0.24",
     "tree-sitter-python>=0.23",
@@ -33,7 +32,7 @@ dependencies = [
     "tree-sitter-matlab>=1.0",
     "python-dotenv>=1.0",
     "structlog>=24.0",
-    "chromadb",
+    "watchdog>=4.0",
 ]
 
 [project.optional-dependencies]

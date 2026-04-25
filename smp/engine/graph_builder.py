@@ -6,14 +6,15 @@ Updated for SMP(3) partitioned data model.
 from __future__ import annotations
 
 from smp.core.models import Document, GraphEdge, NodeType
-from smp.engine.interfaces import GraphBuilder as GraphBuilderInterface
 from smp.logging import get_logger
 from smp.store.interfaces import GraphStore
 
 log = get_logger(__name__)
 
 
-class DefaultGraphBuilder(GraphBuilderInterface):
+class DefaultGraphBuilder:
+    """Persists parsed :class:`~smp.core.models.Document` objects into a graph store."""
+
     def __init__(self, graph_store: GraphStore) -> None:
         self._store = graph_store
         self._pending_edges: list[tuple[GraphEdge, str, str]] = []
@@ -71,7 +72,7 @@ class DefaultGraphBuilder(GraphBuilderInterface):
                 # and if the module prefix is in our import map
                 matched_module = None
                 original_name = entity_name
-                for module_alias, (module_path, module_orig) in import_map.items():
+                for module_alias, (_module_path, _module_orig) in import_map.items():
                     if entity_name.startswith(f"{module_alias}."):
                         matched_module = module_alias
                         original_name = entity_name[len(module_alias) + 1 :]
@@ -153,24 +154,6 @@ class DefaultGraphBuilder(GraphBuilderInterface):
             filename = os.path.splitext(os.path.basename(n.file_path))[0]
             if filename == module_stem:
                 log.info("resolve_match_stem", id=n.id, filename=filename, stem=module_stem)
-                return n.id
-
-        return candidates[0].id
-
-        # Get the base name of the module (e.g., 'core' from 'project/core')
-        module_stem = module_path.split("/")[-1]
-
-        for n in candidates:
-            # Exact match of file path
-            if n.file_path == module_path:
-                return n.id
-
-            # Match filename without extension
-            # e.g., '/path/to/core.rs' -> 'core'
-            import os
-
-            filename = os.path.splitext(os.path.basename(n.file_path))[0]
-            if filename == module_stem:
                 return n.id
 
         return candidates[0].id

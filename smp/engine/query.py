@@ -10,7 +10,6 @@ from collections import deque
 from typing import Any
 
 from smp.core.models import EdgeType, GraphNode, NodeType
-from smp.engine.interfaces import QueryEngine as QueryEngineInterface
 from smp.logging import get_logger
 from smp.store.interfaces import GraphStore
 
@@ -20,7 +19,7 @@ _HTTP_VERB_DECORATORS = {"get", "post", "put", "delete", "patch", "head", "optio
 _UTILITY_PATH_SEGMENTS = {"/utils", "/lib", "/shared", "/helpers"}
 
 
-class DefaultQueryEngine(QueryEngineInterface):
+class DefaultQueryEngine:
     """Query engine backed by a graph store."""
 
     def __init__(
@@ -783,20 +782,13 @@ class DefaultQueryEngine(QueryEngineInterface):
                     current_calls[node.id].add(e.target_id)
 
         if proposed_content:
-            from smp.parser.base import detect_language
-            from smp.parser.registry import ParserRegistry
+            from smp.store.graph.parser import CodeParser
 
-            registry = ParserRegistry()
-            lang = detect_language(file_path)
-            parser = registry.get(lang)
-            if not parser:
-                from smp.core.models import Language
-
-                parser = registry.get(Language.PYTHON)
-            if parser:
+            parser = CodeParser()
+            try:
                 proposed_data = parser.parse(proposed_content, file_path)
-                proposed_node_ids = {n.id for n in proposed_data.nodes}
-            else:
+                proposed_node_ids = {n.node_id for n in proposed_data.nodes}
+            except Exception:  # noqa: BLE001
                 proposed_node_ids = current_node_ids
         else:
             proposed_node_ids = current_node_ids

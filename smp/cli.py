@@ -9,41 +9,38 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from smp.core.config import Settings
 from smp.logging import configure_logging, get_logger
 
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 log = get_logger(__name__)
 
-DEFAULT_EXTENSIONS = (".py", ".rs", ".java", ".ts", ".tsx", ".js", ".jsx")
+DEFAULT_EXTENSIONS = (".py",)
 DEFAULT_MAX_FILE_SIZE = 1_000_000
 
 
 async def ingest_directory(
     directory: str,
     *,
-    neo4j_uri: str | None = None,
-    neo4j_user: str | None = None,
-    neo4j_password: str | None = None,
+    graph_path: str | None = None,
     extensions: tuple[str, ...] = DEFAULT_EXTENSIONS,
     max_file_size: int = DEFAULT_MAX_FILE_SIZE,
     clear: bool = False,
 ) -> dict[str, int]:
-    """Walk *directory*, parse all matching files, and build the graph."""
-    from smp.engine.enricher import StaticSemanticEnricher
-    from smp.engine.graph_builder import DefaultGraphBuilder
-    from smp.parser.registry import ParserRegistry
-    from smp.store.graph.neo4j_store import Neo4jGraphStore
+    """Walk *directory*, parse all matching files, and build the graph.
 
-    registry = ParserRegistry()
-    graph_store = Neo4jGraphStore(
-        uri=neo4j_uri or os.environ.get("SMP_NEO4J_URI", "bolt://localhost:7687"),
-        user=neo4j_user or os.environ.get("SMP_NEO4J_USER", "neo4j"),
-        password=neo4j_password or os.environ.get("SMP_NEO4J_PASSWORD", ""),
-    )
-    builder = DefaultGraphBuilder(graph_store)
-    enricher = StaticSemanticEnricher()
+    Files are parsed on-demand via :class:`MMapGraphStore.parse_file`,
+    which extracts nodes and edge candidates and writes them through the
+    memory-mapped store directly.
+    """
+    from smp.store.graph.mmap_store import MMapGraphStore
 
+    settings = Settings.from_env()
+    resolved_path = graph_path or settings.graph_path
+    Path(resolved_path).parent.mkdir(parents=True, exist_ok=True)
+
+    graph_store = MMapGraphStore(path=resolved_path)
     await graph_store.connect()
     if clear:
         await graph_store.clear()
@@ -77,55 +74,23 @@ async def ingest_directory(
         ):
             continue
 
-        rel_path = str(file_path.relative_to(root))
-        doc = registry.parse_file(str(file_path))
-        doc = type(doc)(
-            file_path=rel_path,
-            language=doc.language,
-            nodes=[
-                type(n)(
-                    id=n.id.replace(str(file_path), rel_path),
-                    type=n.type,
-                    file_path=rel_path,
-                    structural=n.structural,
-                    semantic=n.semantic,
-                )
-                for n in doc.nodes
-            ],
-            edges=[
-                type(e)(
-                    source_id=e.source_id.replace(str(file_path), rel_path),
-                    target_id=e.target_id.replace(str(file_path), rel_path),
-                    type=e.type,
-                    metadata=e.metadata,
-                )
-                for e in doc.edges
-            ],
-            errors=doc.errors,
-        )
-
-        if doc.nodes or doc.edges:
-            await builder.ingest_document(doc)
-
-        if doc.nodes:
-            enriched = await enricher.enrich_batch(doc.nodes)
-            for en in enriched:
-                if en.semantic.status == "enriched":
-                    await graph_store.upsert_node(en)
+        try:
+            graph_nodes = await graph_store.parse_file(str(file_path))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("parse_failed", file=str(file_path), error=str(exc))
+            stats["errors"] += 1
+            continue
 
         stats["files"] += 1
-        stats["nodes"] += len(doc.nodes)
-        stats["edges"] += len(doc.edges)
-        stats["errors"] += len(doc.errors)
+        stats["nodes"] += len(graph_nodes)
 
-    resolved = await builder.resolve_pending_edges()
-    if resolved:
-        log.info("post_ingest_edges_resolved", count=resolved)
+    stats["edges"] = await graph_store.count_edges()
 
     elapsed = time.monotonic() - t0
     log.info(
         "ingest_complete",
         directory=str(root),
+        graph_path=resolved_path,
         files=stats["files"],
         nodes=stats["nodes"],
         edges=stats["edges"],
@@ -145,43 +110,43 @@ def main() -> None:
     ingest_cmd = sub.add_parser("ingest", help="Parse a directory and build the graph")
     ingest_cmd.add_argument("directory", help="Root directory to ingest")
     ingest_cmd.add_argument(
-        "--neo4j-uri", type=str, help="Neo4j URI (defaults to SMP_NEO4J_URI env var or bolt://localhost:7687)"
-    )
-    ingest_cmd.add_argument("--neo4j-user", type=str, help="Neo4j user (defaults to SMP_NEO4J_USER env var or neo4j)")
-    ingest_cmd.add_argument(
-        "--neo4j-password", type=str, help="Neo4j password (defaults to SMP_NEO4J_PASSWORD env var)"
+        "--graph-path",
+        type=str,
+        help="Path to the .smpg graph file (defaults to SMP_GRAPH_PATH or .smp/graph.smpg)",
     )
     ingest_cmd.add_argument("--clear", action="store_true", help="Clear graph before ingesting")
     ingest_cmd.add_argument("--json-log", action="store_true", help="JSON structured logging")
     ingest_cmd.add_argument("--max-size", type=int, default=DEFAULT_MAX_FILE_SIZE, help="Max file size in bytes")
 
     serve_cmd = sub.add_parser("serve", help="Start the SMP JSON-RPC server")
-    serve_cmd.add_argument("--host", default="0.0.0.0", help="Bind host")
-    serve_cmd.add_argument("--port", type=int, default=8420, help="Bind port")
+    serve_cmd.add_argument("--host", default=None, help="Bind host")
+    serve_cmd.add_argument("--port", type=int, default=None, help="Bind port")
     serve_cmd.add_argument(
-        "--neo4j-uri", type=str, help="Neo4j URI (defaults to SMP_NEO4J_URI env var or bolt://localhost:7687)"
+        "--graph-path",
+        type=str,
+        help="Path to the .smpg graph file (defaults to SMP_GRAPH_PATH or .smp/graph.smpg)",
     )
-    serve_cmd.add_argument("--neo4j-user", type=str, help="Neo4j user (defaults to SMP_NEO4J_USER env var or neo4j)")
-    serve_cmd.add_argument("--neo4j-password", type=str, help="Neo4j password (defaults to SMP_NEO4J_PASSWORD env var)")
-    serve_cmd.add_argument("--safety", action="store_true", help="Enable agent safety protocol")
     serve_cmd.add_argument("--json-log", action="store_true", help="JSON structured logging")
 
-    run_cmd = sub.add_parser("run", help="Run a command in the background")
-    run_cmd.add_argument("name", help="Name for this background process")
-    run_cmd.add_argument("command", nargs="+", help="Command and arguments to run")
-    run_cmd.add_argument("--cwd", type=str, help="Working directory")
-    run_cmd.add_argument("--env", nargs="+", help="Environment variables as KEY=VALUE")
-    run_cmd.add_argument("--restart", action="store_true", help="Restart if already running")
+    backup_cmd = sub.add_parser("backup", help="Snapshot the graph file consistently")
+    backup_cmd.add_argument("--graph-path", type=str, help="Live graph file (defaults to env)")
+    backup_cmd.add_argument("--output", required=True, help="Where to write the snapshot")
+    backup_cmd.add_argument("--json-log", action="store_true")
 
-    list_cmd = sub.add_parser("ps", help="List running background processes")
-    list_cmd.add_argument("--name", help="Show specific process details")
+    restore_cmd = sub.add_parser("restore", help="Restore a graph file from a backup")
+    restore_cmd.add_argument("--graph-path", type=str, help="Live graph file (defaults to env)")
+    restore_cmd.add_argument("--input", required=True, help="Backup file to restore from")
+    restore_cmd.add_argument("--json-log", action="store_true")
 
-    stop_cmd = sub.add_parser("stop", help="Stop a background process")
-    stop_cmd.add_argument("name", help="Name of the process to stop")
+    compact_cmd = sub.add_parser(
+        "compact", help="Rewrite the journal to drop obsolete records"
+    )
+    compact_cmd.add_argument("--graph-path", type=str, help="Live graph file (defaults to env)")
+    compact_cmd.add_argument("--json-log", action="store_true")
 
-    logs_cmd = sub.add_parser("logs", help="View logs for a background process")
-    logs_cmd.add_argument("name", help="Name of the process")
-    logs_cmd.add_argument("--stream", action="store_true", help="Stream new output")
+    integrity_cmd = sub.add_parser("integrity", help="Run a full on-disk integrity check")
+    integrity_cmd.add_argument("--graph-path", type=str, help="Live graph file (defaults to env)")
+    integrity_cmd.add_argument("--json-log", action="store_true")
 
     args = parser.parse_args()
     if not args.command:
@@ -194,9 +159,7 @@ def main() -> None:
         stats = asyncio.run(
             ingest_directory(
                 args.directory,
-                neo4j_uri=args.neo4j_uri,
-                neo4j_user=args.neo4j_user,
-                neo4j_password=args.neo4j_password,
+                graph_path=getattr(args, "graph_path", None),
                 clear=args.clear,
                 max_file_size=args.max_size,
             )
@@ -207,94 +170,92 @@ def main() -> None:
         )
 
     elif args.command == "serve":
-        import os
-
         import uvicorn
 
-        # Only set env vars if explicitly provided (to allow env var fallbacks)
-        if args.neo4j_uri:
-            os.environ["SMP_NEO4J_URI"] = args.neo4j_uri
-        if args.neo4j_user:
-            os.environ["SMP_NEO4J_USER"] = args.neo4j_user
-        if args.neo4j_password:
-            os.environ["SMP_NEO4J_PASSWORD"] = args.neo4j_password
+        if args.graph_path:
+            os.environ["SMP_GRAPH_PATH"] = args.graph_path
 
         from smp.protocol.server import create_app
 
-        application = create_app(
-            neo4j_uri=args.neo4j_uri,
-            neo4j_user=args.neo4j_user,
-            neo4j_password=args.neo4j_password,
-            safety_enabled=getattr(args, "safety", False),
-        )
-        uvicorn.run(application, host=args.host, port=args.port)
+        settings = Settings.from_env()
+        host = args.host or settings.host
+        port = args.port or settings.port
 
-    elif args.command == "run":
-        from smp.core.background import BackgroundRunner
+        application = create_app(graph_path=args.graph_path)
+        uvicorn.run(application, host=host, port=port)
 
-        env = {}
-        if args.env:
-            for e in args.env:
-                if "=" in e:
-                    key, val = e.split("=", 1)
-                    env[key] = val
+    elif args.command == "backup":
+        from smp.observability.backup import backup as backup_store
+        from smp.store.graph.mmap_store import MMapGraphStore
 
-        runner = BackgroundRunner()
-        cwd = Path(args.cwd) if args.cwd else None
+        settings = Settings.from_env()
+        path = args.graph_path or settings.graph_path
 
-        try:
-            bg_proc = runner.start(args.name, args.command, cwd=cwd, env=env or None)
-            print(f"Started {args.name}: pid={bg_proc.pid}")
-        except ValueError as e:
-            if args.restart:
-                bg_proc = runner.restart(args.name)
-                print(f"Restarted {args.name}: pid={bg_proc.pid}")
-            else:
-                print(f"Error: {e}")
-                sys.exit(1)
+        async def _do_backup() -> None:
+            store = MMapGraphStore(path=path)
+            await store.connect()
+            try:
+                target = await backup_store(store, args.output)
+                print(f"Backup written: {target} ({store.file.size} bytes)")
+            finally:
+                await store.close()
 
-    elif args.command == "ps":
-        from smp.core.background import BackgroundRunner
+        asyncio.run(_do_backup())
 
-        runner = BackgroundRunner()
-        if args.name:
-            proc = runner.get(args.name)
-            if proc:
-                print(f"{args.name}: pid={proc['pid']}, running={proc['running']}")
-                print(f"  command: {' '.join(proc['command'])}")
-            else:
-                print(f"Process not found: {args.name}")
-        else:
-            all_procs = runner.list()
-            if all_procs:
-                for name, info in all_procs.items():
-                    print(f"{name}: pid={info['pid']}, running={info['running']}")
-            else:
-                print("No background processes running")
+    elif args.command == "restore":
+        from smp.observability.backup import restore as restore_store
 
-    elif args.command == "stop":
-        from smp.core.background import BackgroundRunner
+        settings = Settings.from_env()
+        path = args.graph_path or settings.graph_path
 
-        runner = BackgroundRunner()
-        if runner.stop(args.name):
-            print(f"Stopped {args.name}")
-        else:
-            print(f"Process not found: {args.name}")
-            sys.exit(1)
+        async def _do_restore() -> None:
+            target = await restore_store(path, args.input)
+            print(f"Restored to: {target}")
 
-    elif args.command == "logs":
-        from smp.core.background import BackgroundRunner
+        asyncio.run(_do_restore())
 
-        runner = BackgroundRunner()
-        try:
-            logs = runner.logs(args.name)
-            if logs["stdout"]:
-                print(f"=== stdout ===\n{logs['stdout']}")
-            if logs["stderr"]:
-                print(f"=== stderr ===\n{logs['stderr']}")
-        except ValueError as e:
-            print(f"Error: {e}")
-            sys.exit(1)
+    elif args.command == "compact":
+        from smp.observability.backup import compact as compact_store
+        from smp.store.graph.mmap_store import MMapGraphStore
+
+        settings = Settings.from_env()
+        path = args.graph_path or settings.graph_path
+
+        async def _do_compact() -> None:
+            store = MMapGraphStore(path=path)
+            await store.connect()
+            try:
+                stats = await compact_store(store)
+                saved = stats["before_bytes"] - stats["after_bytes"]
+                print(
+                    f"Compacted: {stats['before_bytes']} -> {stats['after_bytes']} bytes "
+                    f"(saved {saved})"
+                )
+            finally:
+                await store.close()
+
+        asyncio.run(_do_compact())
+
+    elif args.command == "integrity":
+        import json as _json
+
+        from smp.store.graph.mmap_store import MMapGraphStore
+
+        settings = Settings.from_env()
+        path = args.graph_path or settings.graph_path
+
+        async def _do_integrity() -> None:
+            store = MMapGraphStore(path=path)
+            await store.connect()
+            try:
+                report = await store.integrity_report()
+                print(_json.dumps(report, indent=2, default=str))
+                if not report["ok"]:
+                    sys.exit(2)
+            finally:
+                await store.close()
+
+        asyncio.run(_do_integrity())
 
 
 if __name__ == "__main__":

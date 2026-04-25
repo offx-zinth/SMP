@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-import os
+from collections.abc import AsyncIterator
+from pathlib import Path
 
 import pytest
 
@@ -14,46 +15,38 @@ from smp.core.models import (
     SemanticProperties,
     StructuralProperties,
 )
-from smp.store.graph.neo4j_store import Neo4jGraphStore
-
-# Load environment from .env if not already set
-if "SMP_NEO4J_URI" not in os.environ:
-    try:
-        from dotenv import load_dotenv
-        import pathlib
-
-        # Find the project root and load .env
-        project_root = pathlib.Path(__file__).parent.parent
-        env_file = project_root / ".env"
-        if env_file.exists():
-            load_dotenv(env_file)
-    except ImportError:
-        pass
-
+from smp.store.graph.mmap_store import MMapGraphStore
 
 # ---------------------------------------------------------------------------
-# Neo4j fixtures
+# Memory-mapped graph store fixtures
 # ---------------------------------------------------------------------------
-
-
-@pytest.fixture(scope="session")
-def neo4j_store() -> Neo4jGraphStore:
-    """Provide a connected Neo4j graph store (session-scoped)."""
-    uri = os.environ.get("SMP_NEO4J_URI", "bolt://localhost:7687")
-    user = os.environ.get("SMP_NEO4J_USER", "neo4j")
-    password = os.environ.get("SMP_NEO4J_PASSWORD", "")
-    store = Neo4jGraphStore(uri=uri, user=user, password=password)
-    return store
 
 
 @pytest.fixture()
-async def clean_graph(neo4j_store: Neo4jGraphStore):
-    """Provide a clean Neo4j store, clearing data before and after each test."""
-    await neo4j_store.connect()
-    await neo4j_store.clear()
-    yield neo4j_store
-    await neo4j_store.clear()
-    await neo4j_store.close()
+async def graph_store(tmp_path: Path) -> AsyncIterator[MMapGraphStore]:
+    """Provide a connected ``MMapGraphStore`` backed by a per-test mmap file.
+
+    A fresh ``.smpg`` file is created under ``tmp_path`` for each test.  The
+    store is closed automatically when the test finishes.
+    """
+    graph_path = tmp_path / "graph.smpg"
+    store = MMapGraphStore(path=graph_path)
+    await store.connect()
+    try:
+        yield store
+    finally:
+        await store.close()
+
+
+@pytest.fixture()
+async def clean_graph(graph_store: MMapGraphStore) -> AsyncIterator[MMapGraphStore]:
+    """Backwards-compatible alias for :func:`graph_store`.
+
+    ``MMapGraphStore`` already starts empty per-test, so no extra cleanup is
+    required.  The fixture is kept so existing tests that reference
+    ``clean_graph`` continue to work.
+    """
+    yield graph_store
 
 
 # ---------------------------------------------------------------------------

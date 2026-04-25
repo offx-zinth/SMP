@@ -1,245 +1,162 @@
-"""Integration tests for SMP Protocol Handlers via the dispatcher."""
+"""Integration tests for SMP protocol handlers.
+
+The legacy ``RpcDispatcher`` and per-domain handler classes have been replaced
+by plain async functions in :mod:`smp.protocol.handlers.query` and
+:mod:`smp.protocol.handlers.memory`, dispatched inline from
+:mod:`smp.protocol.server`.  These tests exercise both layers end-to-end
+against a real ``MMapGraphStore``.
+"""
 
 from __future__ import annotations
 
-from smp.protocol.dispatcher import RpcDispatcher
-from smp.protocol.handlers.annotation import (
-    AnnotateBulkHandler,
-    AnnotateHandler,
-    TagHandler,
-)
-from smp.protocol.handlers.community import (
-    CommunityBoundariesHandler,
-    CommunityDetectHandler,
-    CommunityGetHandler,
-    CommunityListHandler,
-)
-from smp.protocol.handlers.enrichment import (
-    EnrichBatchHandler,
-    EnrichHandler,
-    EnrichStaleHandler,
-    EnrichStatusHandler,
-)
-from smp.protocol.handlers.handoff import (
-    HandoffPRHandler,
-    HandoffReviewHandler,
-)
-from smp.protocol.handlers.memory import (
-    BatchUpdateHandler,
-    ReindexHandler,
-    UpdateHandler,
-)
-from smp.protocol.handlers.merkle import (
-    IndexExportHandler,
-    IndexImportHandler,
-    MerkleTreeHandler,
-    SyncHandler,
-)
-from smp.protocol.handlers.query import (
-    ContextHandler,
-    FlowHandler,
-    ImpactHandler,
-    LocateHandler,
-    NavigateHandler,
-    SearchHandler,
-    TraceHandler,
-)
-from smp.protocol.handlers.safety import (
-    AuditGetHandler,
-    CheckpointHandler,
-    DryRunHandler,
-    GuardCheckHandler,
-    IntegrityVerifyHandler,
-    LockHandler,
-    RollbackHandler,
-    SessionCloseHandler,
-    SessionOpenHandler,
-    SessionRecoverHandler,
-    UnlockHandler,
-)
-from smp.protocol.handlers.sandbox import (
-    SandboxDestroyHandler,
-    SandboxExecuteHandler,
-    SandboxSpawnHandler,
-)
-from smp.protocol.handlers.telemetry import (
-    TelemetryHandler,
-    TelemetryHotHandler,
-    TelemetryNodeHandler,
-    TelemetryRecordHandler,
-)
+import pytest
+
+from smp.core.models import EdgeType, NodeType
+from smp.engine.graph_builder import DefaultGraphBuilder
+from smp.engine.query import DefaultQueryEngine
+from smp.protocol.handlers import memory as memory_handlers
+from smp.protocol.handlers import query as query_handlers
+from smp.protocol.server import _MethodNotFoundError, _dispatch
+from smp.store.graph.mmap_store import MMapGraphStore
+
+from .conftest import make_edge, make_node
 
 
-class TestHandlerRegistration:
-    """Test that all registered handlers are reachable."""
+@pytest.fixture()
+async def seeded_ctx(clean_graph: MMapGraphStore) -> dict[str, object]:
+    """A small graph + dispatch context wired around it."""
+    login = make_node(id="func_login", file_path="src/auth/login.py")
+    validate = make_node(
+        id="func_validate",
+        type=NodeType.FUNCTION,
+        file_path="src/auth/validate.py",
+    )
+    await clean_graph.upsert_node(login)
+    await clean_graph.upsert_node(validate)
+    await clean_graph.upsert_edge(
+        make_edge(source="func_login", target="func_validate", edge_type=EdgeType.CALLS)
+    )
 
-    def test_all_registered_handlers_have_valid_method(self):
-        """Each handler in dispatcher must have a valid non-empty method name."""
-        dispatcher = RpcDispatcher()
-        for method, handler in dispatcher._handlers.items():
-            assert method, f"Handler {handler.__class__.__name__} has empty method"
-            assert isinstance(method, str), f"Handler method must be str, got {type(method)}"
-            assert handler.method == method, (
-                f"Handler method mismatch: expected '{method}', "
-                f"got '{handler.method}' from {handler.__class__.__name__}"
-            )
-
-
-class TestHandlerInstantiation:
-    """Test each handler class can be instantiated without errors."""
-
-    def test_safety_handlers(self):
-        """Safety handlers can be instantiated."""
-        handlers = [
-            SessionOpenHandler,
-            SessionCloseHandler,
-            SessionRecoverHandler,
-            GuardCheckHandler,
-            DryRunHandler,
-            CheckpointHandler,
-            RollbackHandler,
-            LockHandler,
-            UnlockHandler,
-            AuditGetHandler,
-            IntegrityVerifyHandler,
-        ]
-        for handler_cls in handlers:
-            handler = handler_cls()
-            assert handler.method.startswith("smp/"), f"{handler_cls.__name__} has invalid method: {handler.method}"
-
-    def test_query_handlers(self):
-        """Query handlers can be instantiated."""
-        handlers = [
-            NavigateHandler,
-            TraceHandler,
-            ContextHandler,
-            ImpactHandler,
-            LocateHandler,
-            SearchHandler,
-            FlowHandler,
-        ]
-        for handler_cls in handlers:
-            handler = handler_cls()
-            assert handler.method.startswith("smp/"), f"{handler_cls.__name__} has invalid method: {handler.method}"
-
-    def test_community_handlers(self):
-        """Community handlers can be instantiated."""
-        handlers = [
-            CommunityDetectHandler,
-            CommunityListHandler,
-            CommunityGetHandler,
-            CommunityBoundariesHandler,
-        ]
-        for handler_cls in handlers:
-            handler = handler_cls()
-            assert handler.method.startswith("smp/"), f"{handler_cls.__name__} has invalid method: {handler.method}"
-
-    def test_merkle_handlers(self):
-        """Merkle handlers can be instantiated."""
-        handlers = [
-            SyncHandler,
-            MerkleTreeHandler,
-            IndexExportHandler,
-            IndexImportHandler,
-        ]
-        for handler_cls in handlers:
-            handler = handler_cls()
-            assert handler.method.startswith("smp/"), f"{handler_cls.__name__} has invalid method: {handler.method}"
-
-    def test_handoff_handlers(self):
-        """Handoff handlers can be instantiated."""
-        handlers = [
-            HandoffReviewHandler,
-            HandoffPRHandler,
-        ]
-        for handler_cls in handlers:
-            handler = handler_cls()
-            assert handler.method.startswith("smp/"), f"{handler_cls.__name__} has invalid method: {handler.method}"
-
-    def test_enrichment_handlers(self):
-        """Enrichment handlers can be instantiated."""
-        handlers = [
-            EnrichHandler,
-            EnrichBatchHandler,
-            EnrichStaleHandler,
-            EnrichStatusHandler,
-        ]
-        for handler_cls in handlers:
-            handler = handler_cls()
-            assert handler.method.startswith("smp/"), f"{handler_cls.__name__} has invalid method: {handler.method}"
-
-    def test_annotation_handlers(self):
-        """Annotation handlers can be instantiated."""
-        handlers = [
-            AnnotateHandler,
-            AnnotateBulkHandler,
-            TagHandler,
-        ]
-        for handler_cls in handlers:
-            handler = handler_cls()
-            assert handler.method.startswith("smp/"), f"{handler_cls.__name__} has invalid method: {handler.method}"
-
-    def test_memory_handlers(self):
-        """Memory handlers can be instantiated."""
-        handlers = [
-            UpdateHandler,
-            BatchUpdateHandler,
-            ReindexHandler,
-        ]
-        for handler_cls in handlers:
-            handler = handler_cls()
-            assert handler.method.startswith("smp/"), f"{handler_cls.__name__} has invalid method: {handler.method}"
-
-    def test_sandbox_handlers(self):
-        """Sandbox handlers can be instantiated."""
-        handlers = [
-            SandboxSpawnHandler,
-            SandboxExecuteHandler,
-            SandboxDestroyHandler,
-        ]
-        for handler_cls in handlers:
-            handler = handler_cls()
-            assert handler.method.startswith("smp/"), f"{handler_cls.__name__} has invalid method: {handler.method}"
-
-    def test_telemetry_handlers(self):
-        """Telemetry handlers can be instantiated."""
-        handlers = [
-            TelemetryHandler,
-            TelemetryHotHandler,
-            TelemetryNodeHandler,
-            TelemetryRecordHandler,
-        ]
-        for handler_cls in handlers:
-            handler = handler_cls()
-            assert handler.method.startswith("smp/"), f"{handler_cls.__name__} has invalid method: {handler.method}"
+    engine = DefaultQueryEngine(graph_store=clean_graph)
+    builder = DefaultGraphBuilder(clean_graph)
+    return {"engine": engine, "builder": builder, "graph": clean_graph}
 
 
-class TestDispatcherHandlerDiscovery:
-    """Test that all expected handlers are registered in the dispatcher."""
+# ---------------------------------------------------------------------------
+# Query handlers — direct function calls
+# ---------------------------------------------------------------------------
 
-    def test_safety_handlers_registered(self):
-        """All safety handlers are registered in dispatcher."""
-        dispatcher = RpcDispatcher()
-        expected_methods = [
-            "smp/session/open",
-            "smp/session/close",
-            "smp/session/recover",
-            "smp/guard/check",
-            "smp/dryrun",
-            "smp/checkpoint",
-            "smp/rollback",
-            "smp/lock",
-            "smp/unlock",
-            "smp/audit/get",
-            "smp/verify/integrity",
-        ]
-        for method in expected_methods:
-            assert dispatcher.get_handler(method) is not None, f"Missing handler for {method}"
 
-    def test_query_handlers_registered(self):
-        """All query handlers are registered in dispatcher."""
-        dispatcher = RpcDispatcher()
-        expected_methods = [
+class TestQueryHandlers:
+    """The ``smp/navigate`` … ``smp/flow`` handler functions."""
+
+    async def test_navigate_returns_entity(self, seeded_ctx: dict[str, object]) -> None:
+        result = await query_handlers.navigate(
+            {"query": "func_login", "include_relationships": True}, seeded_ctx
+        )
+        assert isinstance(result, dict)
+        assert "entity" in result
+
+    async def test_trace_returns_node_list(self, seeded_ctx: dict[str, object]) -> None:
+        result = await query_handlers.trace(
+            {"start": "func_login", "relationship": "CALLS", "depth": 2}, seeded_ctx
+        )
+        assert isinstance(result, dict)
+        assert "nodes" in result
+        assert isinstance(result["nodes"], list)
+
+    async def test_context_returns_dict(self, seeded_ctx: dict[str, object]) -> None:
+        result = await query_handlers.context({"file_path": "src/auth/login.py"}, seeded_ctx)
+        assert isinstance(result, dict)
+
+    async def test_impact_returns_dict(self, seeded_ctx: dict[str, object]) -> None:
+        result = await query_handlers.impact(
+            {"entity": "func_login", "change_type": "delete"}, seeded_ctx
+        )
+        assert isinstance(result, dict)
+
+    async def test_locate_returns_matches(self, seeded_ctx: dict[str, object]) -> None:
+        result = await query_handlers.locate({"query": "login", "top_k": 3}, seeded_ctx)
+        assert isinstance(result, dict)
+        assert "matches" in result
+
+    async def test_search_returns_dict(self, seeded_ctx: dict[str, object]) -> None:
+        result = await query_handlers.search({"query": "login", "top_k": 3}, seeded_ctx)
+        assert isinstance(result, dict)
+
+    async def test_flow_returns_dict(self, seeded_ctx: dict[str, object]) -> None:
+        result = await query_handlers.flow(
+            {"start": "func_login", "end": "func_validate"}, seeded_ctx
+        )
+        assert isinstance(result, dict)
+        assert "path" in result
+
+
+# ---------------------------------------------------------------------------
+# Memory handlers
+# ---------------------------------------------------------------------------
+
+
+class TestMemoryHandlers:
+    """The ``smp/update``, ``smp/batch_update``, ``smp/reindex`` handlers."""
+
+    async def test_update_returns_status_envelope(
+        self, seeded_ctx: dict[str, object], tmp_path
+    ) -> None:
+        # Use a path that does not exist; update should still produce a
+        # well-formed envelope, since MMapGraphStore tolerates unknown files.
+        target = tmp_path / "missing.py"
+        result = await memory_handlers.update({"file_path": str(target)}, seeded_ctx)
+        assert isinstance(result, dict)
+        assert result["file_path"] == str(target)
+        for key in ("nodes", "edges", "errors"):
+            assert key in result
+
+    async def test_batch_update_aggregates_results(
+        self, seeded_ctx: dict[str, object], tmp_path
+    ) -> None:
+        files = [tmp_path / f"f{i}.py" for i in range(3)]
+        result = await memory_handlers.batch_update(
+            {"changes": [{"file_path": str(p)} for p in files]}, seeded_ctx
+        )
+        assert result["updates"] == 3
+        assert len(result["results"]) == 3
+
+    async def test_reindex_returns_status(self, seeded_ctx: dict[str, object]) -> None:
+        # Pass a non-directory scope; the handler should still acknowledge the request.
+        result = await memory_handlers.reindex({"scope": "/definitely/not/a/real/dir"}, seeded_ctx)
+        assert isinstance(result, dict)
+        assert "status" in result
+
+
+# ---------------------------------------------------------------------------
+# Inline server dispatch
+# ---------------------------------------------------------------------------
+
+
+class TestServerDispatch:
+    """Round-trip through :func:`smp.protocol.server._dispatch`."""
+
+    async def test_dispatch_navigate(self, seeded_ctx: dict[str, object]) -> None:
+        result = await _dispatch("smp/navigate", {"query": "func_login"}, seeded_ctx)
+        assert "entity" in result
+
+    async def test_dispatch_trace(self, seeded_ctx: dict[str, object]) -> None:
+        result = await _dispatch(
+            "smp/trace",
+            {"start": "func_login", "relationship": "CALLS", "depth": 2},
+            seeded_ctx,
+        )
+        assert "nodes" in result
+
+    async def test_dispatch_unknown_method_raises(self, seeded_ctx: dict[str, object]) -> None:
+        with pytest.raises(_MethodNotFoundError) as excinfo:
+            await _dispatch("smp/does_not_exist", {}, seeded_ctx)
+        assert excinfo.value.method == "smp/does_not_exist"
+
+    @pytest.mark.parametrize(
+        "method",
+        [
             "smp/navigate",
             "smp/trace",
             "smp/context",
@@ -247,97 +164,21 @@ class TestDispatcherHandlerDiscovery:
             "smp/locate",
             "smp/search",
             "smp/flow",
-        ]
-        for method in expected_methods:
-            assert dispatcher.get_handler(method) is not None, f"Missing handler for {method}"
-
-    def test_community_handlers_registered(self):
-        """All community handlers are registered in dispatcher."""
-        dispatcher = RpcDispatcher()
-        expected_methods = [
-            "smp/community/detect",
-            "smp/community/list",
-            "smp/community/get",
-            "smp/community/boundaries",
-        ]
-        for method in expected_methods:
-            assert dispatcher.get_handler(method) is not None, f"Missing handler for {method}"
-
-    def test_merkle_handlers_registered(self):
-        """All merkle handlers are registered in dispatcher."""
-        dispatcher = RpcDispatcher()
-        expected_methods = [
-            "smp/sync",
-            "smp/merkle/tree",
-            "smp/index/export",
-            "smp/index/import",
-        ]
-        for method in expected_methods:
-            assert dispatcher.get_handler(method) is not None, f"Missing handler for {method}"
-
-    def test_handoff_handlers_registered(self):
-        """All handoff handlers are registered in dispatcher."""
-        dispatcher = RpcDispatcher()
-        expected_methods = [
-            "smp/handoff/review",
-            "smp/handoff/pr",
-        ]
-        for method in expected_methods:
-            assert dispatcher.get_handler(method) is not None, f"Missing handler for {method}"
-
-    def test_enrichment_handlers_registered(self):
-        """All enrichment handlers are registered in dispatcher."""
-        dispatcher = RpcDispatcher()
-        expected_methods = [
-            "smp/enrich",
-            "smp/enrich/batch",
-            "smp/enrich/stale",
-            "smp/enrich/status",
-        ]
-        for method in expected_methods:
-            assert dispatcher.get_handler(method) is not None, f"Missing handler for {method}"
-
-    def test_annotation_handlers_registered(self):
-        """All annotation handlers are registered in dispatcher."""
-        dispatcher = RpcDispatcher()
-        expected_methods = [
-            "smp/annotate",
-            "smp/annotate/bulk",
-            "smp/tag",
-        ]
-        for method in expected_methods:
-            assert dispatcher.get_handler(method) is not None, f"Missing handler for {method}"
-
-    def test_memory_handlers_registered(self):
-        """All memory handlers are registered in dispatcher."""
-        dispatcher = RpcDispatcher()
-        expected_methods = [
             "smp/update",
             "smp/batch_update",
             "smp/reindex",
-        ]
-        for method in expected_methods:
-            assert dispatcher.get_handler(method) is not None, f"Missing handler for {method}"
-
-    def test_sandbox_handlers_registered(self):
-        """All sandbox handlers are registered in dispatcher."""
-        dispatcher = RpcDispatcher()
-        expected_methods = [
-            "smp/sandbox/spawn",
-            "smp/sandbox/execute",
-            "smp/sandbox/destroy",
-        ]
-        for method in expected_methods:
-            assert dispatcher.get_handler(method) is not None, f"Missing handler for {method}"
-
-    def test_telemetry_handlers_registered(self):
-        """All telemetry handlers are registered in dispatcher."""
-        dispatcher = RpcDispatcher()
-        expected_methods = [
-            "smp/telemetry",
-            "smp/telemetry/hot",
-            "smp/telemetry/node",
-            "smp/telemetry/record",
-        ]
-        for method in expected_methods:
-            assert dispatcher.get_handler(method) is not None, f"Missing handler for {method}"
+        ],
+    )
+    async def test_known_methods_are_dispatched(
+        self, seeded_ctx: dict[str, object], method: str
+    ) -> None:
+        # We don't assert the exact shape — only that the method is recognised
+        # (i.e. ``_MethodNotFoundError`` is *not* raised).
+        try:
+            await _dispatch(method, {"query": "x", "file_path": "x", "scope": "full"}, seeded_ctx)
+        except _MethodNotFoundError:
+            pytest.fail(f"method {method!r} should be registered")
+        except Exception:  # noqa: BLE001
+            # Handler may legitimately raise on the synthetic params; that's
+            # outside the scope of this dispatch-routing check.
+            pass

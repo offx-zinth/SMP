@@ -421,7 +421,7 @@ Sandboxes are used for: running test suites to capture runtime edges, integrity 
 ```bash
 git clone https://github.com/your-org/smp.git
 cd smp
-cp .env.example .env        # Edit with your Neo4j password
+cp .env.example .env        # Edit any ChromaDB / OpenAI settings
 docker compose up -d
 curl http://localhost:8420/health
 # → {"status":"ok"}
@@ -429,7 +429,7 @@ curl http://localhost:8420/health
 
 ### Manual Installation
 
-**Requirements:** Python 3.11, Neo4j 5.x
+**Requirements:** Python 3.11
 
 ```bash
 # 1. Clone and configure
@@ -442,11 +442,11 @@ python3.11 -m venv .venv
 source .venv/bin/activate     # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 
-# 3. Start the server
-smp serve --port 8420
+# 3. Start the server (writes to .smp/graph.smpg by default)
+smp serve --port 8420 --graph-path .smp/graph.smpg
 
 # 4. Ingest your project
-smp ingest /path/to/your/project
+smp ingest /path/to/your/project --graph-path .smp/graph.smpg
 
 # 5. Run a query
 smp query "Where is the authentication logic handled?"
@@ -455,14 +455,20 @@ smp query "Where is the authentication logic handled?"
 **Environment variables (`.env`):**
 
 ```env
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=your_password
+SMP_GRAPH_PATH=.smp/graph.smpg
 CHROMA_HOST=localhost
 CHROMA_PORT=8000
 SMP_PORT=8420
 OPENAI_API_KEY=sk-...   # Used for code_embedding generation at index time only
 ```
+
+> **Note:** SMP no longer requires Neo4j by default — the graph lives in a
+> single memory-mapped `.smpg` file backed by `MMapGraphStore`. The legacy
+> Neo4j backend is still available as an optional install:
+>
+> ```bash
+> pip install -e ".[legacy-neo4j]"
+> ```
 
 ---
 
@@ -1088,11 +1094,11 @@ Once connected, your MCP-compatible IDE or agent (Cursor, Claude Code, Windsurf,
 
 | Component | Technology | Rationale |
 |---|---|---|
-| **AST Parsing** | Tree-sitter | Multi-language, incremental, fast — no LLM |
-| **Graph DB** | Neo4j 5.x | CALLS, IMPORTS, PageRank, BM25 full-text, community detection via GDS |
+| **AST Parsing** | Tree-sitter (Python, JS, TS, Java, C, C++, C#, Go, Rust, PHP, Swift, Kotlin, Ruby, MATLAB) | Multi-language, incremental, fast — no LLM |
+| **Graph DB** | `MMapGraphStore` (single-file `.smpg`) | Memory-mapped, ingest-free, lock-free reads, WAL-backed writes |
 | **Vector Index** | ChromaDB | High-speed seed discovery at query time |
 | **Merkle Index** | SHA-256 (in-process) | O(log n) incremental sync, secure snapshot distribution |
-| **Community Detection** | Louvain (Neo4j GDS) | Topology-only, no LLM, reproducible |
+| **Community Detection** | Louvain (in-process) | Topology-only, no LLM, reproducible |
 | **Runtime Tracing** | eBPF (BCC / libbpf) | Kernel-level call capture — zero app instrumentation |
 | **Sandbox Runtime** | Docker / Firecracker microVMs | Ephemeral, CoW filesystem, hard egress firewall |
 | **Container Topology** | Testcontainers | Per-sandbox Postgres, Redis, etc. |
@@ -1199,7 +1205,7 @@ def handle_locate(params, ctx):
 | **Static Linker** | Namespace-aware cross-file CALLS resolution |
 | **Runtime Linker** | eBPF execution traces → `CALLS_RUNTIME` edges |
 | **Enricher** | Attach docstrings, annotations, tags, `code_embedding` |
-| **Graph DB** | Neo4j — structure, PageRank, sessions, telemetry, BM25 |
+| **Graph DB** | `MMapGraphStore` — single-file mmap, structure, PageRank, sessions, telemetry, BM25 |
 | **Vector Index** | ChromaDB — `code_embedding` per node for seed phase |
 | **Merkle Index** | SHA-256 tree — O(log n) incremental sync + secure distribution |
 | **SeedWalkEngine** | `smp/locate` pipeline: vector seed → N-hop walk → composite rank |
