@@ -11,6 +11,7 @@ from typing import Any
 
 from smp.core.models import EdgeType, GraphNode, NodeType
 from smp.logging import get_logger
+from smp.store.graph.parser import CodeParser
 from smp.store.interfaces import GraphStore
 
 log = get_logger(__name__)
@@ -415,16 +416,17 @@ class DefaultQueryEngine:
                     score = 15
                     matched_on = "docstring"
 
-            if score > 0:
-                for tag in node.semantic.tags:
-                    if any(t in tag.lower() for t in terms):
-                        score += 10
-                        if matched_on:
-                            matched_on += ", tags"
-                        else:
-                            matched_on = "tags"
-                        break
+            # Check tags even if no name/docstring match
+            for tag in node.semantic.tags:
+                if any(t in tag.lower() for t in terms):
+                    score += 10
+                    if matched_on:
+                        matched_on += ", tags"
+                    else:
+                        matched_on = "tags"
+                    break
 
+            if score > 0:
                 scored.append(
                     (
                         score,
@@ -632,10 +634,12 @@ class DefaultQueryEngine:
         file_nodes = await self._graph.find_nodes(file_path=target_file)
 
         affected_nodes: list[str] = []
+        total_callers = 0
         for node in file_nodes:
             callers = await self._graph.traverse(node.id, EdgeType.CALLS, depth=10, max_nodes=200, direction="incoming")
             if callers:
                 affected_nodes.append(node.id)
+                total_callers += len(callers)
 
         steps: list[dict[str, str]] = [
             {"step": "1", "action": "Backup current state", "details": f"Snapshot {target_file}"},
@@ -658,7 +662,7 @@ class DefaultQueryEngine:
             "change_type": change_type,
             "affected_nodes": affected_nodes,
             "steps": steps,
-            "risk_level": "high" if len(affected_nodes) > 10 else "medium" if affected_nodes else "low",
+            "risk_level": "high" if total_callers > 10 else "medium" if affected_nodes else "low",
         }
 
     async def conflict(
@@ -782,8 +786,6 @@ class DefaultQueryEngine:
                     current_calls[node.id].add(e.target_id)
 
         if proposed_content:
-            from smp.store.graph.parser import CodeParser
-
             parser = CodeParser()
             try:
                 proposed_data = parser.parse(proposed_content, file_path)
