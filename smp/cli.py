@@ -5,6 +5,7 @@ import asyncio
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -16,7 +17,36 @@ load_dotenv(Path(__file__).parent.parent / ".env")
 
 log = get_logger(__name__)
 
-DEFAULT_EXTENSIONS = (".py",)
+DEFAULT_EXTENSIONS = (
+    ".py",
+    ".pyw",
+    ".pyi",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".ts",
+    ".mts",
+    ".cts",
+    ".tsx",
+    ".java",
+    ".c",
+    ".h",
+    ".cpp",
+    ".cc",
+    ".cxx",
+    ".hpp",
+    ".hh",
+    ".cs",
+    ".go",
+    ".rs",
+    ".php",
+    ".rb",
+    ".swift",
+    ".kt",
+    ".kts",
+    ".m",
+)
 DEFAULT_MAX_FILE_SIZE = 1_000_000
 
 
@@ -30,11 +60,11 @@ async def ingest_directory(
 ) -> dict[str, int]:
     """Walk *directory*, parse all matching files, and build the graph.
 
-    Files are parsed on-demand via :class:`MMapGraphStore.parse_file`,
-    which extracts nodes and edge candidates and writes them through the
-    memory-mapped store directly.
+    Uses a ThreadPoolExecutor to parallelize CPU-bound parsing, then
+     applies results to the store sequentially.
     """
     from smp.store.graph.mmap_store import MMapGraphStore
+    from smp.store.graph.parser import CodeParser, ParsedFile
 
     settings = Settings.from_env()
     resolved_path = graph_path or settings.graph_path
@@ -53,6 +83,8 @@ async def ingest_directory(
     stats = {"files": 0, "nodes": 0, "edges": 0, "errors": 0, "skipped": 0}
     t0 = time.monotonic()
 
+    # 1. Collect files to parse
+    files_to_parse: list[Path] = []
     for file_path in sorted(root.rglob("*")):
         if not file_path.is_file():
             continue
@@ -73,18 +105,44 @@ async def ingest_directory(
             p.startswith(".") or p in ("node_modules", "__pycache__", "venv", ".venv", "dist", "build") for p in parts
         ):
             continue
+        files_to_parse.append(file_path)
 
+    # 2. Parallel Parse
+    parser = CodeParser()
+    loop = asyncio.get_running_loop()
+
+    def parse_sync(path: Path) -> tuple[str, ParsedFile | Exception]:
         try:
-            graph_nodes = await graph_store.parse_file(str(file_path))
-        except Exception as exc:  # noqa: BLE001
-            log.warning("parse_failed", file=str(file_path), error=str(exc))
+            return (str(path), parser.parse_file(str(path)))
+        except Exception as e:
+            return (str(path), e)
+
+    with ThreadPoolExecutor() as executor:
+        tasks = [loop.run_in_executor(executor, parse_sync, f) for f in files_to_parse]
+        results = await asyncio.gather(*tasks)
+
+    # 3. Sequential Apply
+    for file_path_str, result in results:
+        if isinstance(result, Exception):
+            log.warning("parse_failed", file=file_path_str, error=str(result))
             stats["errors"] += 1
             continue
 
-        stats["files"] += 1
-        stats["nodes"] += len(graph_nodes)
+        try:
+            await graph_store._apply_parsed_file(file_path_str, result)
+            stats["files"] += 1
+            stats["nodes"] += len(result.nodes)
+        except Exception as exc:
+            log.warning("apply_failed", file=file_path_str, error=str(exc))
+            stats["errors"] += 1
 
     stats["edges"] = await graph_store.count_edges()
+
+    try:
+        stats["linked"] = await graph_store.resolve_placeholders()
+    except Exception as exc:
+        log.warning("placeholder_linking_failed", error=str(exc))
+        stats["linked"] = 0
 
     elapsed = time.monotonic() - t0
     log.info(
@@ -94,6 +152,7 @@ async def ingest_directory(
         files=stats["files"],
         nodes=stats["nodes"],
         edges=stats["edges"],
+        linked=stats["linked"],
         errors=stats["errors"],
         skipped=stats["skipped"],
         elapsed_s=round(elapsed, 2),
@@ -128,9 +187,22 @@ def main() -> None:
     )
     serve_cmd.add_argument("--json-log", action="store_true", help="JSON structured logging")
 
+    mcp_cmd = sub.add_parser("mcp", help="Start the SMP MCP server over stdio (for AI agents)")
+    mcp_cmd.add_argument(
+        "--graph-path",
+        type=str,
+        help="Path to the .smpg graph file (defaults to SMP_GRAPH_PATH or .smp/graph.smpg)",
+    )
+    mcp_cmd.add_argument("--json-log", action="store_true", help="JSON structured logging")
+
     backup_cmd = sub.add_parser("backup", help="Snapshot the graph file consistently")
     backup_cmd.add_argument("--graph-path", type=str, help="Live graph file (defaults to env)")
     backup_cmd.add_argument("--output", required=True, help="Where to write the snapshot")
+    backup_cmd.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Incremental backup (not yet supported; exits non-zero)",
+    )
     backup_cmd.add_argument("--json-log", action="store_true")
 
     restore_cmd = sub.add_parser("restore", help="Restore a graph file from a backup")
@@ -138,9 +210,7 @@ def main() -> None:
     restore_cmd.add_argument("--input", required=True, help="Backup file to restore from")
     restore_cmd.add_argument("--json-log", action="store_true")
 
-    compact_cmd = sub.add_parser(
-        "compact", help="Rewrite the journal to drop obsolete records"
-    )
+    compact_cmd = sub.add_parser("compact", help="Rewrite the journal to drop obsolete records")
     compact_cmd.add_argument("--graph-path", type=str, help="Live graph file (defaults to env)")
     compact_cmd.add_argument("--json-log", action="store_true")
 
@@ -175,16 +245,44 @@ def main() -> None:
         if args.graph_path:
             os.environ["SMP_GRAPH_PATH"] = args.graph_path
 
-        from smp.protocol.server import create_app
+        from smp.protocol.server import create_app, setup_graceful_shutdown
 
         settings = Settings.from_env()
         host = args.host or settings.host
         port = args.port or settings.port
 
         application = create_app(graph_path=args.graph_path)
-        uvicorn.run(application, host=host, port=port)
+
+        # Setup graceful shutdown handlers
+        server = uvicorn.Server(uvicorn.Config(application, host=host, port=port))
+        setup_graceful_shutdown(server, application)
+
+        # Run server
+        try:
+            asyncio.run(server.serve())
+        except KeyboardInterrupt:
+            log.info("server_shutdown_keyboard_interrupt")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("server_error", error=str(exc))
+
+    elif args.command == "mcp":
+        if args.graph_path:
+            os.environ["SMP_GRAPH_PATH"] = args.graph_path
+
+        from smp.protocol.mcp import main as mcp_main
+
+        try:
+            mcp_main()
+        except KeyboardInterrupt:
+            log.info("mcp_shutdown_keyboard_interrupt")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("mcp_server_error", error=str(exc))
+            sys.exit(1)
 
     elif args.command == "backup":
+        if getattr(args, "incremental", False):
+            print("error: incremental backups are not supported yet (take a full backup)", file=sys.stderr)
+            sys.exit(1)
         from smp.observability.backup import backup as backup_store
         from smp.store.graph.mmap_store import MMapGraphStore
 
@@ -193,10 +291,17 @@ def main() -> None:
 
         async def _do_backup() -> None:
             store = MMapGraphStore(path=path)
-            await store.connect()
+            try:
+                await store.connect()
+            except (FileNotFoundError, ValueError, OSError) as exc:
+                print(f"backup failed: cannot open graph file: {exc}", file=sys.stderr)
+                sys.exit(1)
             try:
                 target = await backup_store(store, args.output)
                 print(f"Backup written: {target} ({store.file.size} bytes)")
+            except OSError as exc:
+                print(f"backup failed: {exc}", file=sys.stderr)
+                sys.exit(1)
             finally:
                 await store.close()
 
@@ -209,7 +314,14 @@ def main() -> None:
         path = args.graph_path or settings.graph_path
 
         async def _do_restore() -> None:
-            target = await restore_store(path, args.input)
+            try:
+                target = await restore_store(path, args.input)
+            except FileNotFoundError as exc:
+                print(f"restore failed: backup file not found: {exc}", file=sys.stderr)
+                sys.exit(1)
+            except (ValueError, OSError) as exc:
+                print(f"restore failed: {exc}", file=sys.stderr)
+                sys.exit(1)
             print(f"Restored to: {target}")
 
         asyncio.run(_do_restore())
@@ -227,10 +339,7 @@ def main() -> None:
             try:
                 stats = await compact_store(store)
                 saved = stats["before_bytes"] - stats["after_bytes"]
-                print(
-                    f"Compacted: {stats['before_bytes']} -> {stats['after_bytes']} bytes "
-                    f"(saved {saved})"
-                )
+                print(f"Compacted: {stats['before_bytes']} -> {stats['after_bytes']} bytes (saved {saved})")
             finally:
                 await store.close()
 

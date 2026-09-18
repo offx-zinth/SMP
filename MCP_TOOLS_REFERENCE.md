@@ -35,9 +35,9 @@ Find code entities by keyword search.
 - **Use:** Find all functions matching a pattern
 
 ### `smp/search`
-Semantic search across docstrings and tags.
+Keyword search over names, docstrings, descriptions, tags, IDs, and file paths.
 - **Params:** `query: str`, `match?: str`, `filters?: dict`, `top_k?: int`
-- **Returns:** Ranked results with scores
+- **Returns:** Ranked results with keyword scores
 - **Use:** Find related functionality
 
 ### `smp/flow`

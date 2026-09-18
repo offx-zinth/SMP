@@ -109,8 +109,27 @@ class DefaultQueryEngine:
             et = EdgeType(relationship)
         except ValueError:
             et = EdgeType.CALLS
-        nodes = await self._graph.traverse(start, et, depth, max_nodes=100, direction=direction)
+        start_id = await self._resolve_node_id(start)
+        if start_id is None:
+            return []
+        nodes = await self._graph.traverse(start_id, et, depth, max_nodes=100, direction=direction)
         return [self._node_to_dict(n) for n in nodes]
+
+    async def _resolve_node_id(self, query: str) -> str | None:
+        """Resolve a node id, exact file path, structural name, or id fragment to a node id."""
+        if await self._graph.get_node(query) is not None:
+            return query
+        candidates = await self._graph.find_nodes(name=query)
+        if candidates:
+            return candidates[0].id
+        if "/" in query:
+            candidates = await self._graph.find_nodes(file_path=query)
+            if candidates:
+                return candidates[0].id
+        for node in await self._graph.find_nodes():
+            if node.id.startswith(query) or query in node.id:
+                return node.id
+        return None
 
     async def get_context(
         self,
@@ -375,6 +394,7 @@ class DefaultQueryEngine:
         return {
             "affected_files": affected_files,
             "affected_functions": affected_functions,
+            "impacted_nodes": affected_functions,
             "severity": severity,
             "recommendations": recommendations,
         }

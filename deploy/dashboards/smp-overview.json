@@ -1,0 +1,87 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-100"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Request Rate",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "sum(rate(smp_rpc_requests_total[5m]))", "legendFormat": "Requests/sec" }
+      ]
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "title": "Error Rate",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "sum(rate(smp_rpc_errors_total[5m])) / sum(rate(smp_rpc_requests_total[5m]))", "legendFormat": "Error Rate" }
+      ]
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "id": 3,
+      "title": "Latency (Avg)",
+      "type": "timeseries",
+      "targets": [
+        { "expr": "sum(rate(smp_rpc_duration_seconds_sum[5m])) / sum(rate(smp_rpc_duration_seconds_count[5m]))", "legendFormat": "Avg Latency" }
+      ]
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 4,
+      "title": "Journal Size",
+      "type": "gauge",
+      "targets": [
+        { "expr": "smp_journal_size_bytes", "legendFormat": "Journal Size" }
+      ]
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "id": 5,
+      "title": "Active Sessions",
+      "type": "stat",
+      "targets": [
+        { "expr": "smp_sessions_active", "legendFormat": "Sessions" }
+      ]
+    },
+    {
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+      "id": 6,
+      "title": "Graph Size",
+      "type": "stat",
+      "targets": [
+        { "expr": "smp_nodes_total", "legendFormat": "Nodes" },
+        { "expr": "smp_edges_total", "legendFormat": "Edges" }
+      ]
+    }
+  ],
+  "schemaVersion": 36,
+  "style": "dark",
+  "tags": ["smp", "observability"],
+  "title": "SMP Overview",
+  "uid": "smp-overview",
+  "version": 1
+}

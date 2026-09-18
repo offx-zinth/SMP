@@ -4,11 +4,9 @@ Real-world codebase with 50+ functions across Python/Rust/Java/TypeScript
 Tests circular dependencies, deep nesting, diamond patterns, etc.
 """
 
-from datetime import datetime, timedelta
-from typing import List, Dict, Optional, Any
 import json
-import asyncio
-
+from datetime import datetime
+from typing import Any
 
 # ============================================================================
 # CORE DATA MODELS
@@ -26,7 +24,7 @@ class User:
 class Order:
     """Order model."""
 
-    def __init__(self, order_id: str, user_id: str, items: List[str]):
+    def __init__(self, order_id: str, user_id: str, items: list[str]):
         self.order_id = order_id
         self.user_id = user_id
         self.items = items
@@ -101,7 +99,7 @@ def log_user_action(user_id: str, action: str, details: str) -> None:
 # ============================================================================
 
 
-def create_user(user_id: str, email: str, password: str) -> Optional[User]:
+def create_user(user_id: str, email: str, password: str) -> User | None:
     """Create new user with validation."""
     # Validates
     if not validate_user_id(user_id):
@@ -117,7 +115,7 @@ def create_user(user_id: str, email: str, password: str) -> Optional[User]:
     return user
 
 
-def authenticate_user(user_id: str, password: str) -> Optional[str]:
+def authenticate_user(user_id: str, password: str) -> str | None:
     """Authenticate user and return token."""
     if not validate_user_id(user_id):
         return None
@@ -145,7 +143,7 @@ def register_user(user_id: str, email: str, password: str) -> bool:
     return True
 
 
-def verify_token(token: str) -> Optional[str]:
+def verify_token(token: str) -> str | None:
     """Verify token and extract user_id."""
     if not token.startswith("token_"):
         return None
@@ -174,7 +172,7 @@ def get_product_weight(product_id: str) -> float:
     return weights.get(product_id, 0.0)
 
 
-def calculate_order_subtotal(items: List[str]) -> float:
+def calculate_order_subtotal(items: list[str]) -> float:
     """Calculate subtotal from list of product IDs."""
     total = 0.0
     for item in items:
@@ -183,7 +181,7 @@ def calculate_order_subtotal(items: List[str]) -> float:
     return total
 
 
-def calculate_order_weight(items: List[str]) -> float:
+def calculate_order_weight(items: list[str]) -> float:
     """Calculate total weight of order."""
     total_weight = 0.0
     for item in items:
@@ -192,9 +190,7 @@ def calculate_order_weight(items: List[str]) -> float:
     return total_weight
 
 
-def apply_discount_to_order(
-    order_id: str, user_id: str, items: List[str], tier: str
-) -> float:
+def apply_discount_to_order(order_id: str, user_id: str, items: list[str], tier: str) -> float:
     """Apply discount tier to order."""
     subtotal = calculate_order_subtotal(items)
     discount = calculate_discount(tier, subtotal)
@@ -202,8 +198,8 @@ def apply_discount_to_order(
 
 
 def calculate_order_total(
-    order_id: str, user_id: str, items: List[str], region: str, distance: float, tier: str
-) -> Dict[str, float]:
+    order_id: str, user_id: str, items: list[str], region: str, distance: float, tier: str
+) -> dict[str, float]:
     """Calculate complete order total (DIAMOND PATTERN - calls multiple)."""
     # Level 1 calls (core calculations)
     subtotal = calculate_order_subtotal(items)
@@ -227,9 +223,7 @@ def calculate_order_total(
     }
 
 
-def process_order(order_id: str, user_id: str, items: List[str], region: str) -> Optional[
-    Dict[str, Any]
-]:
+def process_order(order_id: str, user_id: str, items: list[str], region: str) -> dict[str, Any] | None:
     """Process order (high-level orchestration)."""
     # Validate user
     if not validate_user_id(user_id):
@@ -275,9 +269,7 @@ def tokenize_payment(card_number: str, card_holder: str) -> str:
     return token
 
 
-def process_payment(
-    order_id: str, user_id: str, amount: float, payment_method: str, token: str
-) -> bool:
+def process_payment(order_id: str, user_id: str, amount: float, payment_method: str, token: str) -> bool:
     """Process payment transaction."""
     # Validate payment method
     if not validate_payment_method(payment_method):
@@ -326,7 +318,7 @@ def release_stock(product_id: str, quantity: int) -> bool:
     return True
 
 
-def check_inventory_availability(items: List[str]) -> bool:
+def check_inventory_availability(items: list[str]) -> bool:
     """Check if all items in list are available (calls get_stock_level)."""
     for item in items:
         stock = get_stock_level(item)
@@ -335,7 +327,7 @@ def check_inventory_availability(items: List[str]) -> bool:
     return True
 
 
-def reserve_order_inventory(order_id: str, items: List[str]) -> bool:
+def reserve_order_inventory(order_id: str, items: list[str]) -> bool:
     """Reserve inventory for entire order."""
     # Check availability first
     if not check_inventory_availability(items):
@@ -354,7 +346,7 @@ def reserve_order_inventory(order_id: str, items: List[str]) -> bool:
 # ============================================================================
 
 
-def create_shipment(order_id: str, items: List[str]) -> Optional[str]:
+def create_shipment(order_id: str, items: list[str]) -> str | None:
     """Create shipment from order."""
     shipment_id = f"SHIP_{order_id}_{int(datetime.now().timestamp())}"
     return shipment_id
@@ -366,13 +358,13 @@ def notify_warehouse(order_id: str, shipment_id: str) -> None:
     pass
 
 
-def track_shipment(shipment_id: str) -> Optional[Dict[str, Any]]:
+def track_shipment(shipment_id: str) -> dict[str, Any] | None:
     """Track shipment status."""
     # In real system: query shipping provider
     return {"shipment_id": shipment_id, "status": "pending", "location": "warehouse"}
 
 
-def cancel_order(order_id: str, user_id: str, items: List[str], amount: float) -> bool:
+def cancel_order(order_id: str, user_id: str, items: list[str], amount: float) -> bool:
     """Cancel order and release inventory."""
     # Release stock
     for item in items:
@@ -388,8 +380,8 @@ def cancel_order(order_id: str, user_id: str, items: List[str], amount: float) -
 
 
 def complete_order_fulfillment(
-    order_id: str, user_id: str, items: List[str], payment_method: str, payment_token: str, region: str
-) -> Optional[Dict[str, Any]]:
+    order_id: str, user_id: str, items: list[str], payment_method: str, payment_token: str, region: str
+) -> dict[str, Any] | None:
     """
     Complete order fulfillment (MAXIMUM NESTING - calls 6+ levels)
     Demonstrates deeply nested call chain.
@@ -438,7 +430,7 @@ def complete_order_fulfillment(
 # ============================================================================
 
 
-def get_user_order_history(user_id: str) -> List[Dict[str, Any]]:
+def get_user_order_history(user_id: str) -> list[dict[str, Any]]:
     """Get all orders for a user."""
     # In real system: query database
     return []
@@ -461,13 +453,13 @@ def get_user_tier(user_id: str) -> str:
     return "bronze"
 
 
-def generate_order_report(order_id: str) -> Dict[str, Any]:
+def generate_order_report(order_id: str) -> dict[str, Any]:
     """Generate detailed report for order."""
     # In real system: compile from multiple sources
     return {"order_id": order_id, "status": "pending"}
 
 
-def generate_user_analytics(user_id: str) -> Dict[str, Any]:
+def generate_user_analytics(user_id: str) -> dict[str, Any]:
     """Generate analytics for user (calls Level 7)."""
     spending = calculate_user_spending(user_id)
     tier = get_user_tier(user_id)
@@ -519,12 +511,12 @@ def recursive_factorial(n: int) -> int:
 # ============================================================================
 
 
-def utility_convert_to_json(data: Dict[str, Any]) -> str:
+def utility_convert_to_json(data: dict[str, Any]) -> str:
     """Convert data to JSON."""
     return json.dumps(data)
 
 
-def utility_parse_json(json_str: str) -> Dict[str, Any]:
+def utility_parse_json(json_str: str) -> dict[str, Any]:
     """Parse JSON string."""
     return json.loads(json_str)
 
@@ -564,9 +556,7 @@ if __name__ == "__main__":
 
     print("\n4. Complete fulfillment...")
     payment_token = tokenize_payment("4111111111111111", "John Doe")
-    fulfillment = complete_order_fulfillment(
-        order_id, user_id, items, "credit_card", payment_token, "US"
-    )
+    fulfillment = complete_order_fulfillment(order_id, user_id, items, "credit_card", payment_token, "US")
     print(f"   Fulfillment status: {fulfillment['status'] if fulfillment else 'Failed'}")
 
     print("\n5. Generate analytics...")

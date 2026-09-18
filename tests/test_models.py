@@ -38,7 +38,40 @@ from smp.core.models import (
     TraceParams,
     UpdateParams,
 )
-from tests.conftest import make_edge, make_node
+
+
+def make_node(
+    id: str = "func_login",
+    type: NodeType = NodeType.FUNCTION,
+    file_path: str = "src/auth/login.py",
+    structural: StructuralProperties | None = None,
+    semantic: SemanticProperties | None = None,
+) -> GraphNode:
+    """Plain factory for model tests (mirrors the legacy login fixture)."""
+    return GraphNode(
+        id=id,
+        type=type,
+        file_path=file_path,
+        structural=structural
+        or StructuralProperties(
+            name="login",
+            file="src/auth/login.py",
+            signature="def login(user: User) -> Token:",
+            start_line=10,
+            end_line=25,
+            lines=16,
+        ),
+        semantic=semantic or SemanticProperties(docstring="Authenticate user and return token.", status="enriched"),
+    )
+
+
+def make_edge(
+    source: str = "func_login",
+    target: str = "func_validate",
+    edge_type: EdgeType = EdgeType.CALLS,
+) -> GraphEdge:
+    """Plain factory for model tests."""
+    return GraphEdge(source_id=source, target_id=target, type=edge_type)
 
 
 class TestGraphNode:

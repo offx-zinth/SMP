@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import msgspec
@@ -37,7 +37,7 @@ log = get_logger(__name__)
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _node_signature(node: GraphNode) -> str:
@@ -67,11 +67,7 @@ def _node_from_dict(data: dict[str, Any]) -> GraphNode | None:
     structural_data = data.get("structural") or {}
     semantic_data = data.get("semantic") or {}
     structural = msgspec.convert(structural_data, StructuralProperties) if structural_data else StructuralProperties()
-    semantic = (
-        msgspec.convert(semantic_data, SemanticProperties)
-        if semantic_data
-        else SemanticProperties()
-    )
+    semantic = msgspec.convert(semantic_data, SemanticProperties) if semantic_data else SemanticProperties()
 
     node_id = data.get("id")
     file_path = data.get("file_path") or data.get("file") or ""
@@ -125,9 +121,7 @@ async def sync(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     missing_locally = sorted(remote_ids - local_ids)
     missing_remotely = sorted(local_ids - remote_ids)
     changed = sorted(
-        node_id
-        for node_id in remote_ids & local_ids
-        if remote_signatures[node_id] != local_signatures[node_id]
+        node_id for node_id in remote_ids & local_ids if remote_signatures[node_id] != local_signatures[node_id]
     )
 
     return {

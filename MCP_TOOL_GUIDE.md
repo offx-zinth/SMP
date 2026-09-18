@@ -11,14 +11,17 @@ The SMP MCP interface allows an LLM to move from a high-level understanding (sea
 ### 1. Knowledge Acquisition & Discovery
 
 #### `smp_search`
-Performs a semantic search across the codebase to find relevant entities based on meaning.
+Performs a keyword search across the codebase, scoring matches in entity names, docstrings, descriptions, tags, IDs,
+and file paths.
 - **Use Case**: "Where is the authentication logic handled?" or "Find code related to payment processing."
 - **Parameters**:
-    - `query` (string): The natural language query.
-- **Returns**: A list of the most semantically similar entities (nodes) in the graph.
+    - `query` (string): Keywords to match (split on whitespace; `match` selects AND vs OR semantics).
+- **Returns**: A list of matching entities (nodes) ranked by keyword score.
+- **Note**: This is keyword matching, not semantic/vector search. Vector similarity is available separately via
+  `smp/vector/search`, which requires caller-supplied embeddings (bring-your-own-embeddings).
 
 #### `smp_locate`
-Finds specific entities by name or property. More precise than semantic search.
+Finds specific entities by name or property. More precise than keyword search when you know the exact name.
 - **Use Case**: "Find the `UserSession` class" or "Locate all functions named `validate_token`."
 - **Parameters**:
     - `query` (string): The name or pattern to search for.

@@ -1,5 +1,6 @@
 """Example Python module for parser testing."""
 
+
 class Calculator:
     """A simple calculator class."""
 

@@ -1,20 +1,20 @@
 from __future__ import annotations
 
-import pytest
-import msgspec
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, UTC, timedelta
+
+import msgspec
+import pytest
 
 from smp.core.models import (
-    GraphNode,
-    GraphEdge,
-    NodeType,
     EdgeType,
-    StructuralProperties,
+    GraphEdge,
+    GraphNode,
+    NodeType,
     SemanticProperties,
+    StructuralProperties,
 )
-from smp.protocol.handlers import memory, query, session, analysis, vector
-from smp.protocol.handlers import enrichment, community, sandbox, sync, review
+from smp.protocol.handlers import analysis, community, enrichment, memory, query, review, sandbox, session, sync, vector
 
 
 def make_node(
@@ -63,7 +63,7 @@ class TestNavigateHandler:
         engine = mock_ctx["engine"]
         engine.navigate = AsyncMock(return_value={"nodes": ["a"]})
         params = {"query": "find_main", "include_relationships": False}
-        result = await query.navigate(params, mock_ctx)
+        await query.navigate(params, mock_ctx)
         engine.navigate.assert_called_once_with("find_main", False)
 
     @pytest.mark.asyncio
@@ -91,7 +91,7 @@ class TestTraceHandler:
         engine = mock_ctx["engine"]
         engine.trace = AsyncMock(return_value=["node1"])
         params = {"start": "func_a"}
-        result = await query.trace(params, mock_ctx)
+        await query.trace(params, mock_ctx)
         engine.trace.assert_called_once_with("func_a", "CALLS", 3, "outgoing")
 
     @pytest.mark.asyncio
@@ -99,7 +99,7 @@ class TestTraceHandler:
         engine = mock_ctx["engine"]
         engine.trace = AsyncMock(return_value=[])
         params = {"start": "func_a", "direction": "incoming"}
-        result = await query.trace(params, mock_ctx)
+        await query.trace(params, mock_ctx)
         engine.trace.assert_called_once_with("func_a", "CALLS", 3, "incoming")
 
 
@@ -145,7 +145,7 @@ class TestImpactHandler:
         engine = mock_ctx["engine"]
         engine.assess_impact = AsyncMock(return_value={"impact_score": 3})
         params = {"entity": "class_a", "change_type": "modify"}
-        result = await query.impact(params, mock_ctx)
+        await query.impact(params, mock_ctx)
         engine.assess_impact.assert_called_once_with("class_a", "modify")
 
 
@@ -168,7 +168,7 @@ class TestLocateHandler:
         engine = mock_ctx["engine"]
         engine.locate = AsyncMock(return_value=[])
         params = {"query": "test", "node_types": ["Function", "Class"]}
-        result = await query.locate(params, mock_ctx)
+        await query.locate(params, mock_ctx)
         engine.locate.assert_called_once()
 
     @pytest.mark.asyncio
@@ -190,7 +190,7 @@ class TestSearchHandler:
         engine = mock_ctx["engine"]
         engine.search = AsyncMock(return_value={"results": ["r1"]})
         params = {"query": "error handling", "match": "any"}
-        result = await query.search(params, mock_ctx)
+        await query.search(params, mock_ctx)
         engine.search.assert_called_once()
 
     @pytest.mark.asyncio
@@ -533,10 +533,12 @@ class TestTelemetryNodeHandler:
         node = make_node("n1")
         node.semantic.tags = ["tag1", "tag2"]
         graph.get_node = AsyncMock(return_value=node)
-        graph.get_edges = AsyncMock(side_effect=[
-            [make_edge("n1", "n2"), make_edge("n1", "n3")],
-            [make_edge("n0", "n1")],
-        ])
+        graph.get_edges = AsyncMock(
+            side_effect=[
+                [make_edge("n1", "n2"), make_edge("n1", "n3")],
+                [make_edge("n0", "n1")],
+            ]
+        )
         params = {"node_id": "n1"}
         result = await analysis.telemetry_node(params, mock_ctx)
         assert result["node_id"] == "n1"
@@ -711,13 +713,16 @@ class TestAnnotateBulkHandler:
     @pytest.mark.asyncio
     async def test_annotate_bulk_success(self, mock_ctx):
         graph = mock_ctx["graph"]
-        graph.get_node = AsyncMock(side_effect=[
-            make_node("n1"),
-            make_node("n2"),
-            None,
-        ])
+        graph.get_node = AsyncMock(
+            side_effect=[
+                make_node("n1"),
+                make_node("n2"),
+                None,
+            ]
+        )
         graph.upsert_node = AsyncMock()
         from smp.core.models import AnnotateBulkItem
+
         params = {
             "annotations": [
                 AnnotateBulkItem(node_id="n1", description="desc1"),
@@ -929,10 +934,12 @@ class TestLockHandler:
     @pytest.mark.asyncio
     async def test_lock_conflict_active(self, mock_ctx):
         graph = mock_ctx["graph"]
-        graph.get_lock = AsyncMock(return_value={
-            "session_id": "s2",
-            "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-        })
+        graph.get_lock = AsyncMock(
+            return_value={
+                "session_id": "s2",
+                "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            }
+        )
         graph.get_session = AsyncMock(return_value={"session_id": "s1", "locked_files": []})
         graph.upsert_lock = AsyncMock()
         graph.append_audit = AsyncMock()
@@ -944,10 +951,12 @@ class TestLockHandler:
     @pytest.mark.asyncio
     async def test_lock_force_steal(self, mock_ctx):
         graph = mock_ctx["graph"]
-        graph.get_lock = AsyncMock(return_value={
-            "session_id": "s2",
-            "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
-        })
+        graph.get_lock = AsyncMock(
+            return_value={
+                "session_id": "s2",
+                "expires_at": (datetime.now(UTC) + timedelta(hours=1)).isoformat(),
+            }
+        )
         graph.release_lock = AsyncMock(return_value=True)
         graph.upsert_lock = AsyncMock()
         graph.append_audit = AsyncMock()
@@ -994,10 +1003,12 @@ class TestAuditGetHandler:
     @pytest.mark.asyncio
     async def test_audit_get_from_graph(self, mock_ctx):
         graph = mock_ctx["graph"]
-        graph.list_audit = AsyncMock(return_value=[
-            {"event": "session_open", "session_id": "s1"},
-            {"event": "lock_acquired", "session_id": "s1"},
-        ])
+        graph.list_audit = AsyncMock(
+            return_value=[
+                {"event": "session_open", "session_id": "s1"},
+                {"event": "lock_acquired", "session_id": "s1"},
+            ]
+        )
         params = {"audit_log_id": "s1"}
         result = await session.audit_get(params, mock_ctx)
         assert result["count"] == 2
@@ -1117,17 +1128,19 @@ class TestPrCreateHandler:
         graph = mock_ctx["graph"]
         graph.upsert_session = AsyncMock()
         mock_provider = MagicMock()
-        mock_provider.create_pull_request = AsyncMock(return_value=MagicMock(
-            pr_id="pr123",
-            title="My PR",
-            body="PR body",
-            branch="feature",
-            base_branch="main",
-            provider="github",
-            url="https://github.com/pr/123",
-            number=123,
-            created_at="2024-01-01T00:00:00Z",
-        ))
+        mock_provider.create_pull_request = AsyncMock(
+            return_value=MagicMock(
+                pr_id="pr123",
+                title="My PR",
+                body="PR body",
+                branch="feature",
+                base_branch="main",
+                provider="github",
+                url="https://github.com/pr/123",
+                number=123,
+                created_at="2024-01-01T00:00:00Z",
+            )
+        )
         mock_get_provider.return_value = mock_provider
         params = {"review_id": "rev1", "title": "My PR", "body": "PR body", "branch": "feature"}
         result = await review.pr_create(params, mock_ctx)
@@ -1144,14 +1157,16 @@ class TestSandboxSpawnHandler:
     @pytest.mark.asyncio
     async def test_sandbox_spawn_success(self, mock_get_runtime, mock_ctx):
         mock_runtime = MagicMock()
-        mock_runtime.spawn = AsyncMock(return_value=MagicMock(
-            sandbox_id="sb_abc123",
-            name="test_sandbox",
-            template="python",
-            files=["main.py"],
-            root="/tmp/sandbox",
-            created_at="2024-01-01T00:00:00Z",
-        ))
+        mock_runtime.spawn = AsyncMock(
+            return_value=MagicMock(
+                sandbox_id="sb_abc123",
+                name="test_sandbox",
+                template="python",
+                files=["main.py"],
+                root="/tmp/sandbox",
+                created_at="2024-01-01T00:00:00Z",
+            )
+        )
         mock_get_runtime.return_value = mock_runtime
         params = {"name": "test_sandbox", "template": "python", "files": {"main.py": "print('hello')"}}
         result = await sandbox.sandbox_spawn(params, mock_ctx)
@@ -1190,18 +1205,20 @@ class TestSandboxExecuteHandler:
     async def test_sandbox_execute_success(self, mock_get_runtime, mock_ctx):
         mock_runtime = MagicMock()
         mock_runtime.get.return_value = MagicMock()
-        mock_runtime.execute = AsyncMock(return_value=MagicMock(
-            execution_id="ex1",
-            status="completed",
-            exit_code=0,
-            stdout="hello",
-            stderr="",
-            started_at="2024-01-01T00:00:00Z",
-            ended_at="2024-01-01T00:00:01Z",
-            duration_ms=1000,
-            timed_out=False,
-            truncated=False,
-        ))
+        mock_runtime.execute = AsyncMock(
+            return_value=MagicMock(
+                execution_id="ex1",
+                status="completed",
+                exit_code=0,
+                stdout="hello",
+                stderr="",
+                started_at="2024-01-01T00:00:00Z",
+                ended_at="2024-01-01T00:00:01Z",
+                duration_ms=1000,
+                timed_out=False,
+                truncated=False,
+            )
+        )
         mock_get_runtime.return_value = mock_runtime
         params = {"sandbox_id": "sb1", "command": ["echo", "hello"]}
         result = await sandbox.sandbox_execute(params, mock_ctx)
@@ -1312,13 +1329,7 @@ class TestSyncHandler:
         graph = mock_ctx["graph"]
         node = make_node("n1", name="func", signature="()", start_line=1, end_line=10)
         graph.find_nodes = AsyncMock(return_value=[node])
-        params = {
-            "remote_data": {
-                "nodes": [
-                    {"id": "n1", "signature": "test.py::Function::func::1", "hash": "abc123"}
-                ]
-            }
-        }
+        params = {"remote_data": {"nodes": [{"id": "n1", "signature": "test.py::Function::func::1", "hash": "abc123"}]}}
         result = await sync.sync(params, mock_ctx)
         assert "in_sync" in result
 
@@ -1353,9 +1364,7 @@ class TestIndexImportHandler:
         graph.upsert_edges = AsyncMock()
         params = {
             "data": {
-                "nodes": [
-                    {"id": "n1", "type": "Function", "file_path": "test.py", "structural": {"name": "f1"}}
-                ],
+                "nodes": [{"id": "n1", "type": "Function", "file_path": "test.py", "structural": {"name": "f1"}}],
                 "edges": [],
             }
         }

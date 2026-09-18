@@ -25,8 +25,7 @@ from smp.core.models import (
     SemanticProperties,
     StructuralProperties,
 )
-from smp.store.graph.journal import RecordType
-from smp.store.graph.mmap_file import OFF_DATA_END, OFF_VERSION
+from smp.store.graph.mmap_file import OFF_DATA_END
 from smp.store.graph.mmap_store import DurabilityMode, MMapGraphStore
 
 
@@ -155,7 +154,7 @@ class TestCrashRecovery:
         finally:
             await reopened.close()
 
-    async def test_corrupted_payload_raises_on_replay(self, tmp_path: Path) -> None:
+    async def test_corrupted_payload_truncated_on_replay(self, tmp_path: Path) -> None:
         path = tmp_path / "graph.smpg"
         store = MMapGraphStore(path)
         await store.connect()
@@ -163,14 +162,20 @@ class TestCrashRecovery:
         end = store.file.data_region_end
         await store.close()
 
-        # Flip a byte inside the last record's payload — CRC must catch this.
+        # Flip a byte inside the last record's payload — CRC must catch this,
+        # and reopen must truncate the torn tail instead of failing.
         with open(path, "r+b") as fh:
             fh.seek(end - 5)
             fh.write(b"\xff")
 
         reopened = MMapGraphStore(path)
-        with pytest.raises(Exception):  # noqa: B017,PT011
-            await reopened.connect()
+        await reopened.connect()
+        try:
+            # The torn tail is dropped; the store opens and stays writable.
+            await reopened.upsert_node(_node("b"))
+            assert await reopened.get_node("b") is not None
+        finally:
+            await reopened.close()
 
 
 class TestDurabilityModes:
@@ -202,9 +207,7 @@ class TestDurabilityModes:
 
         assert calls.count("fsync") >= 2
 
-    async def test_periodic_mode_flushes_after_threshold(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    async def test_periodic_mode_flushes_after_threshold(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         path = tmp_path / "graph.smpg"
         store = MMapGraphStore(path, durability=DurabilityMode.PERIODIC, flush_every=4)
         await store.connect()
@@ -298,8 +301,8 @@ class TestIntegrityHandler:
             await store.close()
 
     async def test_node_level_check_still_works(self, tmp_path: Path) -> None:
-        import json
         import hashlib
+        import json
 
         from smp.engine.graph_builder import DefaultGraphBuilder
         from smp.engine.query import DefaultQueryEngine

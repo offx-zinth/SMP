@@ -8,7 +8,7 @@ returning a JSON-serialisable dict.  ``ctx`` is expected to provide a
 from __future__ import annotations
 
 from collections import Counter
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import msgspec
@@ -30,7 +30,7 @@ log = get_logger(__name__)
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _replace_semantic(node: GraphNode, **changes: Any) -> GraphNode:
@@ -50,6 +50,9 @@ async def enrich(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
 
     if not p.force and node.semantic.status == "enriched":
         return {"node_id": p.node_id, "enriched": False, "skipped": True, "reason": "already_enriched"}
+
+    if not p.force and node.semantic.manually_set:
+        return {"node_id": p.node_id, "enriched": False, "skipped": True, "reason": "manually_set"}
 
     updated = _replace_semantic(
         node,
@@ -72,6 +75,9 @@ async def enrich_batch(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
     timestamp = _now_iso()
     for node in nodes:
         if not p.force and node.semantic.status == "enriched":
+            skipped += 1
+            continue
+        if not p.force and node.semantic.manually_set:
             skipped += 1
             continue
         updated = _replace_semantic(node, status="enriched", enriched_at=timestamp)

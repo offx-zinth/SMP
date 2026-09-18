@@ -34,6 +34,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+import msgspec
+
 if TYPE_CHECKING:
     from smp.store.graph.parser import CodeParser, ParsedFile
     from smp.store.graph.scheduler import BackgroundScheduler
@@ -48,7 +50,7 @@ from smp.core.models import (
     StructuralProperties,
 )
 from smp.logging import get_logger
-from smp.store.graph.journal import Journal, JournalCorruption, RecordType
+from smp.store.graph.journal import Journal, JournalCorruptionError, RecordType
 from smp.store.graph.mmap_file import MMapFile
 from smp.store.graph.query import QueryEngine, QueryResult, parse
 from smp.store.graph.records import (
@@ -83,6 +85,7 @@ class DurabilityMode(enum.StrEnum):
     BEST_EFFORT = "best_effort"
     PERIODIC = "periodic"
     SYNC = "sync"
+
 
 log = get_logger(__name__)
 
@@ -169,6 +172,10 @@ class MMapGraphStore(GraphStore):
         self.file.close()
         self._loop = None
 
+    async def disconnect(self) -> None:
+        """Backward-compatible alias for :meth:`close`."""
+        await self.close()
+
     async def clear(self) -> None:
         """Drop all data on disk and in memory."""
         if self.path.exists():
@@ -184,6 +191,9 @@ class MMapGraphStore(GraphStore):
         self._parsed_files.clear()
         self._file_hashes.clear()
         self._fencing_counter = 0
+        self._tx_counter = 0
+        self._active_tx_id = None
+        self._writes_since_flush = 0
         await self.connect()
 
     # ------------------------------------------------------------------
@@ -197,16 +207,22 @@ class MMapGraphStore(GraphStore):
         cooperating on the same store never interleave bytes inside the
         mmap region.
         """
+        self._append_batch([(rtype, payload)])
+
+    def _append_batch(self, records: list[tuple[RecordType, bytes]]) -> None:
+        """Append multiple records to the journal, honoring the durability mode.
+
+        Writes serialise on a thread lock so concurrent ``asyncio`` tasks
+        cooperating on the same store never interleave bytes inside the
+        mmap region.
+        """
         with self._write_lock:
-            self.journal.append(rtype, payload, fsync=False)
+            self.journal.append_batch(records, fsync=False)
             self._writes_since_flush += 1
             if self._durability is DurabilityMode.SYNC:
                 self.file.fsync()
                 self._writes_since_flush = 0
-            elif (
-                self._durability is DurabilityMode.PERIODIC
-                and self._writes_since_flush >= self._flush_every
-            ):
+            elif self._durability is DurabilityMode.PERIODIC and self._writes_since_flush >= self._flush_every:
                 self.file.flush()
                 self._writes_since_flush = 0
 
@@ -222,21 +238,31 @@ class MMapGraphStore(GraphStore):
         committed = 0
         aborted = 0
         dropped = 0
+        corrupt = 0
         buffer: list[tuple[RecordType, bytes]] = []
         in_tx = False
+        last_good = self.file.data_region_start
         try:
-            for rtype, payload, _ in self.journal.replay():
+            for rtype, payload, record_offset in self.journal.replay():
+                last_good = record_offset
                 if rtype is RecordType.BEGIN_TX:
                     if in_tx:
                         dropped += len(buffer)
                         buffer = []
                     in_tx = True
-                    tx = decode(payload, TransactionPayload)
+                    try:
+                        tx = decode(payload, TransactionPayload)
+                    except (msgspec.DecodeError, msgspec.ValidationError):
+                        log.warning("journal_record_corrupt", record=rtype.name)
+                        corrupt += 1
+                        in_tx = False
+                        continue
                     self._tx_counter = max(self._tx_counter, tx.tx_id)
                 elif rtype is RecordType.COMMIT_TX:
                     if in_tx:
                         for r_type, r_payload in buffer:
-                            self._apply_record(r_type, r_payload)
+                            if not self._apply_record_safe(r_type, r_payload):
+                                corrupt += 1
                         committed += 1
                     buffer = []
                     in_tx = False
@@ -248,13 +274,29 @@ class MMapGraphStore(GraphStore):
                 else:
                     if in_tx:
                         buffer.append((rtype, payload))
-                    else:
-                        self._apply_record(rtype, payload)
+                    elif not self._apply_record_safe(rtype, payload):
+                        corrupt += 1
             if buffer:
                 dropped += len(buffer)
-        except JournalCorruption:
-            log.exception("journal_replay_failed", path=str(self.path))
-            raise
+        except JournalCorruptionError as exc:
+            # A torn tail (crash mid-write or bit rot) must not prevent
+            # reopen: keep everything replayed so far, rewind data_end past
+            # the corrupt record, and continue serving.
+            dropped += len(buffer)
+            buffer = []
+            in_tx = False
+            truncate_at = exc.offset if exc.offset is not None else last_good
+            try:
+                self.file.truncate_to(truncate_at)
+            except (ValueError, OSError):
+                log.exception("journal_truncate_failed", path=str(self.path))
+                raise
+            log.warning(
+                "journal_corruption_truncated",
+                path=str(self.path),
+                detail=str(exc),
+                truncated_to=truncate_at,
+            )
         log.info(
             "journal_replayed",
             path=str(self.path),
@@ -265,7 +307,22 @@ class MMapGraphStore(GraphStore):
             tx_committed=committed,
             tx_aborted=aborted,
             tx_records_dropped=dropped,
+            tx_records_corrupt=corrupt,
         )
+
+    def _apply_record_safe(self, rtype: RecordType, payload: bytes) -> bool:
+        """Apply a journal record, skipping (with a warning) corrupt payloads.
+
+        Returns True when the record was applied, False when its payload
+        failed to decode. A single bad payload must never prevent the
+        store from reopening.
+        """
+        try:
+            self._apply_record(rtype, payload)
+        except (msgspec.DecodeError, msgspec.ValidationError):
+            log.warning("journal_record_corrupt", record=rtype.name)
+            return False
+        return True
 
     def _apply_record(self, rtype: RecordType, payload: bytes) -> None:  # noqa: C901, PLR0912
         if rtype is RecordType.NODE_UPSERT:
@@ -341,8 +398,20 @@ class MMapGraphStore(GraphStore):
         return True
 
     def _apply_edge_upsert(self, edge: GraphEdge) -> None:
-        self._edges.setdefault(edge.source_id, []).append(edge)
-        self._edge_index.setdefault(edge.target_id, []).append(edge)
+        existing_out = self._edges.setdefault(edge.source_id, [])
+        for i, current in enumerate(existing_out):
+            if current.target_id == edge.target_id and current.type == edge.type:
+                existing_out[i] = edge
+                break
+        else:
+            existing_out.append(edge)
+        existing_in = self._edge_index.setdefault(edge.target_id, [])
+        for i, current in enumerate(existing_in):
+            if current.source_id == edge.source_id and current.type == edge.type:
+                existing_in[i] = edge
+                break
+        else:
+            existing_in.append(edge)
 
     def _apply_file_delete(self, file_path: str) -> int:
         to_delete = [nid for nid, n in self._nodes.items() if n.file_path == file_path]
@@ -359,8 +428,13 @@ class MMapGraphStore(GraphStore):
         self._append(RecordType.NODE_UPSERT, encode(NodeUpsertPayload(node=node)))
 
     async def upsert_nodes(self, nodes: Sequence[GraphNode]) -> None:
+        records: list[tuple[RecordType, bytes]] = []
         for node in nodes:
-            await self.upsert_node(node)
+            self._apply_node_upsert(node)
+            records.append((RecordType.NODE_UPSERT, encode(NodeUpsertPayload(node=node))))
+
+        if records:
+            self._append_batch(records)
 
     async def get_node(self, node_id: str) -> GraphNode | None:
         return self._nodes.get(node_id)
@@ -389,8 +463,25 @@ class MMapGraphStore(GraphStore):
         self._append(RecordType.EDGE_UPSERT, encode(EdgeUpsertPayload(edge=edge)))
 
     async def upsert_edges(self, edges: Sequence[GraphEdge]) -> None:
+        records: list[tuple[RecordType, bytes]] = []
         for edge in edges:
-            await self.upsert_edge(edge)
+            self._apply_edge_upsert(edge)
+            records.append((RecordType.EDGE_UPSERT, encode(EdgeUpsertPayload(edge=edge))))
+
+        if records:
+            self._append_batch(records)
+
+    async def get_edge(
+        self,
+        source_id: str,
+        target_id: str,
+        edge_type: EdgeType | None = None,
+    ) -> GraphEdge | None:
+        """Return the edge from *source_id* to *target_id*, or ``None``."""
+        for edge in self._edges.get(source_id, []):
+            if edge.target_id == target_id and (edge_type is None or edge.type == edge_type):
+                return edge
+        return None
 
     async def get_edges(
         self,
@@ -413,17 +504,19 @@ class MMapGraphStore(GraphStore):
         edge_type: EdgeType | None = None,
         depth: int = 1,
     ) -> list[GraphNode]:
-        edge_types: EdgeType | list[EdgeType] = edge_type if edge_type else []
-        return await self.traverse(node_id, edge_types, depth, max_nodes=1000, direction="outgoing")
+        return await self.traverse(node_id, edge_type, depth, max_nodes=1000, direction="outgoing")
 
     async def traverse(
         self,
         start_id: str,
-        edge_type: EdgeType | list[EdgeType],
-        depth: int,
+        edge_type: EdgeType | list[EdgeType] | None = None,
+        depth: int = 1,
         max_nodes: int = 100,
         direction: str = "outgoing",
+        **kwargs: Any,
     ) -> list[GraphNode]:
+        if "relationship" in kwargs and edge_type is None:
+            edge_type = kwargs["relationship"]
         if start_id not in self._nodes:
             return []
 
@@ -448,13 +541,23 @@ class MMapGraphStore(GraphStore):
                 if edge_types and edge.type not in edge_types:
                     continue
 
-                target_id = edge.target_id if direction != "incoming" else edge.source_id
-                if target_id in visited:
+                if direction == "incoming":
+                    neighbor_id = edge.source_id
+                elif direction == "outgoing":
+                    neighbor_id = edge.target_id
+                else:  # both: resolve the opposite endpoint of this edge
+                    if edge.source_id == current_id:
+                        neighbor_id = edge.target_id
+                    elif edge.target_id == current_id:
+                        neighbor_id = edge.source_id
+                    else:
+                        continue
+                if neighbor_id in visited:
                     continue
-                if target_id in self._nodes:
-                    visited.add(target_id)
-                    results.append(self._nodes[target_id])
-                    queue.append((target_id, current_depth + 1))
+                if neighbor_id in self._nodes:
+                    visited.add(neighbor_id)
+                    results.append(self._nodes[neighbor_id])
+                    queue.append((neighbor_id, current_depth + 1))
 
         return results
 
@@ -478,6 +581,42 @@ class MMapGraphStore(GraphStore):
             results = [n for n in results if n.structural.name == name]
         return results
 
+    async def query_nodes(
+        self,
+        filter: dict[str, Any] | None = None,
+        *,
+        type: NodeType | None = None,
+        file_path: str | None = None,
+        name: str | None = None,
+    ) -> list[GraphNode]:
+        """Backward-compatible alias for :meth:`find_nodes`.
+
+        Accepts either keyword filters or a legacy positional filter dict
+        such as ``{"type": "Function"}``.
+        """
+        if filter:
+            type_value = filter.get("type")
+            if type_value and type is None:
+                try:
+                    type = NodeType(type_value)
+                except ValueError:
+                    for member in NodeType:
+                        if member.value.lower() == str(type_value).lower():
+                            type = member
+                            break
+            file_path = filter.get("file_path", file_path)
+            name = filter.get("name", name)
+        return await self.find_nodes(type=type, file_path=file_path, name=name)
+
+    async def find_nodes_by_scope(self, scope: str) -> list[GraphNode]:
+        """Find nodes whose id or file path starts with *scope*.
+
+        ``"full"`` (or an empty scope) matches every node.
+        """
+        if not scope or scope == "full":
+            return list(self._nodes.values())
+        return [n for n in self._nodes.values() if n.id.startswith(scope) or n.file_path.startswith(scope)]
+
     async def search_nodes(
         self,
         query_terms: list[str],
@@ -496,6 +635,10 @@ class MMapGraphStore(GraphStore):
                 term_lower = term.lower()
                 if term_lower in node.structural.name.lower():
                     score += 3
+                if term_lower in node.id.lower():
+                    score += 3
+                if term_lower in node.file_path.lower():
+                    score += 1
                 if node.semantic.docstring and term_lower in node.semantic.docstring.lower():
                     score += 2
                 if node.semantic.description and term_lower in node.semantic.description.lower():
@@ -519,6 +662,40 @@ class MMapGraphStore(GraphStore):
 
     async def count_edges(self) -> int:
         return sum(len(e) for e in self._edges.values())
+
+    async def resolve_placeholders(self) -> int:
+        """Link ``::name::`` placeholder edges to real nodes by name.
+
+        Parsing records every call as an edge to ``::name::``; same-file
+        targets are resolved during ingest, but cross-file calls keep the
+        placeholder. This pass links each placeholder to every node whose
+        structural name matches (over-approximating, which is the safe
+        direction for impact analysis). Placeholders are kept so later
+        ingests can link newly added files. Edge dedup keeps this
+        idempotent — safe to run after every ingest.
+
+        Returns the number of edges added.
+        """
+        by_name: dict[str, list[str]] = {}
+        for node in self._nodes.values():
+            if node.structural.name:
+                by_name.setdefault(node.structural.name, []).append(node.id)
+
+        to_add: list[GraphEdge] = []
+        for edges in self._edges.values():
+            for edge in edges:
+                target = edge.target_id
+                if not (target.startswith("::") and target.endswith("::")):
+                    continue
+                short_name = target.strip(":").split(".")[-1]
+                for node_id in by_name.get(short_name, []):
+                    to_add.append(GraphEdge(source_id=edge.source_id, target_id=node_id, type=edge.type))
+
+        if to_add:
+            await self.upsert_edges(to_add)
+        if to_add:
+            log.info("placeholders_resolved", added=len(to_add))
+        return len(to_add)
 
     # ------------------------------------------------------------------
     # Parser / scheduler / watcher
@@ -592,14 +769,30 @@ class MMapGraphStore(GraphStore):
         graph_nodes = self._parsed_to_graph_nodes(file_path, parsed)
         await self.upsert_nodes(graph_nodes)
 
+        # Resolve same-file call targets: link edge candidates whose target
+        # name matches a node defined in this file. Anything else keeps the
+        # `::name::` placeholder so cross-file linking can resolve it later.
+        name_to_id = {node.structural.name: node.id for node in graph_nodes if node.structural.name}
+        resolved: list[GraphEdge] = []
         for ec in parsed.edge_candidates:
-            await self.upsert_edge(
+            target_id = f"::{ec.target_name}::"
+            short_name = ec.target_name.split(".")[-1]
+            if short_name in name_to_id:
+                target_id = name_to_id[short_name]
+            try:
+                edge_type = EdgeType(ec.edge_type)
+            except ValueError:
+                continue
+            resolved.append(
                 GraphEdge(
                     source_id=ec.source_id,
-                    target_id=f"::{ec.target_name}::",
-                    type=EdgeType(ec.edge_type),
+                    target_id=target_id,
+                    type=edge_type,
                 )
             )
+
+        if resolved:
+            await self.upsert_edges(resolved)
 
         if parsed.resolved_edges:
             await self.upsert_edges(parsed.resolved_edges)
@@ -936,7 +1129,7 @@ class MMapGraphStore(GraphStore):
             for rtype, _payload, _offset in self.journal.replay():
                 record_count += 1
                 type_counts[rtype.name] = type_counts.get(rtype.name, 0) + 1
-        except JournalCorruption as exc:
+        except JournalCorruptionError as exc:
             report["ok"] = False
             report["errors"].append({"kind": "journal_corruption", "detail": str(exc)})
 
@@ -974,7 +1167,11 @@ class MMapGraphStore(GraphStore):
         ]
         if unknown_session_locks:
             report["warnings"].append(
-                {"kind": "lock_unknown_session", "count": len(unknown_session_locks), "samples": unknown_session_locks[:5]}
+                {
+                    "kind": "lock_unknown_session",
+                    "count": len(unknown_session_locks),
+                    "samples": unknown_session_locks[:5],
+                }
             )
 
         if self.file.data_region_end > self.file.size:

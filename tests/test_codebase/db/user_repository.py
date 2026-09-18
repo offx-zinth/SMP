@@ -5,7 +5,8 @@ from .base_repository import BaseRepository
 
 class User:
     """Represents a user entity."""
-    def __init__(self, user_id: str, username: str, email: str):
+
+    def __init__(self, user_id: str, username: str, email: str) -> None:
         self.user_id = user_id
         self.username = username
         self.email = email

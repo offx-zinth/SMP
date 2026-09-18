@@ -1,10 +1,12 @@
 # SMP Project Structure Exploration Summary
 
 ## Overview
-**SMP (Structural Memory Protocol)** is a graph-based codebase intelligence system that provides AI agents with a programmer's brain instead of flat-text retrieval. It's built on Python 3.11+, FastAPI, Neo4j, ChromaDB, and tree-sitter.
+**SMP (Structural Memory Protocol)** is a graph-based codebase intelligence system that provides AI agents with
+a programmer's brain instead of flat-text retrieval. It's built on Python 3.11+, FastAPI, msgspec, tree-sitter,
+and FAISS — self-contained, with no external database.
 
 - **Total Python Code:** ~9,111 lines
-- **Stack:** Python 3.11+, FastAPI, msgspec, tree-sitter, Neo4j, ChromaDB, pytest
+- **Stack:** Python 3.11+, FastAPI, msgspec, tree-sitter, FAISS, pytest
 - **Protocol:** JSON-RPC 2.0 over FastAPI + MCP (Model Context Protocol)
 
 ---
@@ -14,73 +16,60 @@
 ### Directory Structure
 ```
 smp/
-├── core/               # Data models and core structures
-│   ├── models.py       # GraphNode, GraphEdge, NodeType, EdgeType, SemanticProperties, StructuralProperties
-│   ├── background.py   # Background task management
-│   └── merkle.py       # Merkle tree indexing
-├── engine/             # Core processing logic
-│   ├── query.py        # Query engine (navigate, trace, context, impact, locate, search, flow)
-│   ├── graph_builder.py # Graph ingestion and edge resolution
-│   ├── enricher.py     # Static semantic enrichment
-│   ├── community.py    # Community detection (Louvain algorithm)
-│   ├── embedding.py    # Embedding service
-│   ├── linker.py       # Cross-file dependency resolution
-│   ├── runtime_linker.py # eBPF runtime linking
-│   ├── seed_walk.py    # Community-routed graph RAG
-│   ├── safety.py       # Agent safety layer
-│   ├── sandbox.py      # Sandbox utilities
-│   ├── handoff.py      # Handoff/coordination
-│   ├── integrity.py    # Integrity verification
-│   ├── notification.py # Event notifications
-│   ├── telemetry.py    # Telemetry & observability
-│   ├── pagerank.py     # PageRank scoring
-│   └── interfaces.py   # Abstract base classes
-├── parser/             # Source code parsing
-│   ├── base.py         # TreeSitterParser abstract base
-│   ├── python_parser.py # Python parser implementation
-│   ├── typescript_parser.py # TypeScript/JavaScript parser
-│   └── registry.py     # Parser registry (factory pattern)
-├── protocol/           # API layer
-│   ├── server.py       # FastAPI application factory
-│   ├── mcp.py          # MCP server implementation
-│   ├── dispatcher.py   # JSON-RPC dispatcher
-│   ├── router.py       # HTTP routing
-│   └── handlers/       # JSON-RPC method handlers (see below)
-├── sandbox/            # Code execution in isolated environments
-│   ├── executor.py     # Command execution
-│   ├── spawner.py      # Container/VM spawning
-│   ├── docker_sandbox.py # Docker sandbox
-│   └── ebpf_collector.py # eBPF trace collection
-├── store/              # Persistence layer
-│   ├── interfaces.py   # Abstract store interfaces
-│   ├── chroma_store.py # ChromaDB vector store
-│   └── graph/          # Neo4j graph store implementations
-├── agent.py            # High-level agent API
-├── client.py           # JSON-RPC client
-├── cli.py              # Command-line interface
-├── __init__.py         # Package init
-└── logging.py          # Structured logging
+├── cli.py               # CLI: ingest | serve | mcp | backup | restore | compact | integrity
+├── logging.py           # Structured logging
+├── core/                # Data models and runtime config
+│   ├── models.py        # GraphNode, GraphEdge, NodeType, EdgeType, method params (msgspec structs)
+│   └── config.py        # Settings from env (SMP_GRAPH_PATH, SMP_VECTOR_PATH, SMP_HOST/PORT)
+├── engine/              # Core processing logic
+│   ├── query.py         # Query engine (navigate, trace, context, impact, locate, search, flow)
+│   └── graph_builder.py # Graph ingestion and edge resolution
+├── protocol/            # API layer
+│   ├── server.py        # FastAPI app: JSON-RPC over HTTP (~50 smp/* methods)
+│   ├── mcp.py           # MCP server over stdio
+│   ├── auth.py          # API key auth + scopes
+│   └── handlers/        # query, memory, enrichment, community, session, vector, sandbox, ...
+├── runtime/             # Process execution
+│   ├── sandbox.py       # Child-process sandbox runtime (private work dir, allowlist)
+│   └── git_provider.py  # Git integration
+├── store/               # Persistence layer (self-contained, no external DB)
+│   ├── interfaces.py    # Abstract store interfaces
+│   └── graph/           # Memory-mapped journal graph store (.smpg)
+│       ├── mmap_store.py # MMapGraphStore + resolve_placeholders
+│       ├── parser.py    # Tree-sitter structural parsing (14 languages)
+│       ├── query.py     # Graph queries
+│       └── journal.py   # Append-only journal
+├── vector/              # FAISS-backed mmap vector store (.smpv, bring-your-own embeddings)
+│   ├── mmap_vector.py
+│   └── faiss_index.py
+├── observability/
+│   ├── backup.py        # backup/restore/compact (gzipped tarball + manifest.json)
+│   └── metrics.py       # Metrics + telemetry
+├── __init__.py          # Package init
 ```
 
 ---
 
 ## 2. Core Functionality and Tools
 
-### 2.1 Parser Layer (`smp/parser/`)
-**Purpose:** Extract code structure into typed nodes and edges using tree-sitter AST analysis
+### 2.1 Parser Layer (`smp/store/graph/parser.py`)
+**Purpose:** Extract code structure (functions, classes, interfaces, calls) into typed nodes and edge candidates
+using tree-sitter AST analysis
 
 **Key Classes:**
-- `TreeSitterParser` (abstract) - Base parser with error recovery
-- `PythonParser` - Extracts functions, classes, imports, decorators, type hints
-- `TypeScriptParser` - Extracts TypeScript/JavaScript entities
-- `ParserRegistry` - Dispatcher for language selection
+- `CodeParser` - Table-driven parser over `_LANGUAGE_SPECS`, plus a dedicated Python walker
+- `LanguageSpec` - Per-language tree-sitter shapes (functions, classes, interfaces, calls)
+- `ParsedFile` / `ParsedNode` / `EdgeCandidate` - Parse output consumed by the graph store
 
-**Supported Languages:**
-- Python (.py)
-- TypeScript (.ts, .tsx)
-- JavaScript (.js, .jsx)
+**Supported Languages (14):**
+- Python (.py, .pyw, .pyi)
+- JavaScript (.js, .jsx, .mjs, .cjs)
+- TypeScript (.ts, .mts, .cts) and TSX (.tsx)
+- Java, C (.c, .h), C++ (.cpp, .cc, .cxx, .hpp, .hh), C# (.cs)
+- Go, Rust, PHP, Ruby, Swift, Kotlin (.kt, .kts), MATLAB (.m)
 
-**Output:** `Document` with nodes, edges, and parse errors
+**Output:** `ParsedFile` with nodes, edge candidates (same-file calls resolved, rest as `::name::` placeholders),
+and content hash
 
 ---
 
@@ -111,19 +100,25 @@ smp/
 - Tag management
 - Source hash computation
 
+#### Linking
+**Same-file resolution at ingest + global placeholder linking** (`resolve_placeholders`): cross-file calls are
+recorded as `::name::` placeholder edges, then linked to every node with a matching structural name — across
+files AND languages. This over-approximates (safe for impact analysis; same-named functions may link together).
+
 #### Advanced Features
-- **Community Detection** - Louvain algorithm at two resolutions
-- **Seed Walk Engine** - Vector + graph hybrid RAG
-- **Runtime Linker** - eBPF traces for dynamic dependencies
-- **Safety Layer** - MVCC sessions, locks, dry-run simulation
+- **Community Detection** - Connected-component clustering over the call/import graph
+- **Keyword Search** - `smp/locate` / `smp/search` score names, docstrings, descriptions, tags, IDs, file paths
+- **Vector Store (BYO)** - FAISS-backed mmap store (`.smpv`); embeddings supplied via `smp/vector/upsert` only —
+  ingest creates none and SMP ships no embedding model
+- **Safety Layer** - Sessions, locks, dry-run simulation, checkpoints, audit log
 - **Merkle Indexing** - O(log n) incremental sync
 
 ---
 
-### 2.3 Store Layer (`smp/store/`)
+### 2.3 Store Layer (`smp/store/` + `smp/vector/`)
 
-#### GraphStore Interface
-Abstract base with implementations for Neo4j:
+#### GraphStore (`smp/store/graph/mmap_store.py`)
+Memory-mapped journal graph store (`.smpg` files) — self-contained, no external DB:
 
 **Node Operations:**
 - `upsert_node()`, `upsert_nodes()` - Insert/update
@@ -139,11 +134,11 @@ Abstract base with implementations for Neo4j:
 - `get_neighbors()` - N-hop traversal
 - `traverse()` - BFS with edge type filtering
 
-#### VectorStore Interface
-ChromaDB implementation:
-- `upsert_embedding()` - Store vector + metadata
-- `search()` - Similarity search
-- `delete_by_file()` - Cleanup
+#### VectorStore (`smp/vector/mmap_vector.py`)
+FAISS-backed mmap vector store (`.smpv` files) — bring-your-own embeddings only:
+- `upsert()` - Store caller-supplied vectors + metadata (via `smp/vector/upsert`)
+- `query()` / `search()` - Similarity search over stored vectors (via `smp/vector/search`)
+- `delete()` - Tombstone vectors (via `smp/vector/delete`)
 
 ---
 
@@ -180,7 +175,7 @@ smp/trace         → TraceHandler         - Follow dependency chains
 smp/context       → ContextHandler       - Get contextual scope
 smp/impact        → ImpactHandler        - Assess change blast radius
 smp/locate        → LocateHandler        - Find code entities
-smp/search        → SearchHandler        - Semantic search
+smp/search        → SearchHandler        - Keyword search
 smp/flow          → FlowHandler          - Find execution paths
 ```
 
@@ -323,12 +318,12 @@ tests/
 - **Framework:** pytest + pytest-asyncio
 - **Async Mode:** auto (no decorator needed)
 - **Fixtures in conftest.py:**
-  - `neo4j_store` - Session-scoped graph store
+  - `graph_store` - Fresh `MMapGraphStore` in a tmp dir (per test)
   - `clean_graph` - Per-test fresh graph with cleanup
   - `make_node()` - Factory for test nodes
   - `make_edge()` - Factory for test edges
-  - `vector_store` - Vector store fixture
-  - `make_document()` - Factory for parsed documents
+  - `vector_store` - `MMapVectorStore` fixture in a tmp dir
+  - `populated_graph_store` / `populated_vector_store` - Pre-filled fixtures
 
 ### 4.3 Test Coverage Areas
 1. **Unit Tests** - Models, parsers, individual components
@@ -353,17 +348,17 @@ pytest --asyncio-mode=auto          # Explicit async mode
 ### 5.1 Architecture Layers
 ```
 Protocol Layer (handlers) → Engine Layer (logic) → Store Layer (persistence)
-     ↓                          ↓                         ↓
-JSON-RPC 2.0              Query, Build, Enrich     Neo4j, ChromaDB
-MCP Tools                 Community Detection       Abstract Interfaces
-FastAPI                   Safety, Merkle            Async CRUD
+      ↓                          ↓                         ↓
+JSON-RPC 2.0              Query, Build, Enrich     MMapGraphStore (.smpg)
+MCP Tools (stdio)         Community Detection      FAISS mmap vectors (.smpv)
+FastAPI                   Safety, Merkle           Async CRUD
 ```
 
 ### 5.2 Design Patterns Used
-- **Factory Pattern** - `ParserRegistry`, `create_app()`, `create_embedding_service()`
-- **Abstract Interfaces** - `GraphStore`, `VectorStore`, `Parser`, `GraphBuilder`, `SemanticEnricher`, `QueryEngine`
+- **Factory Pattern** - `create_app()`
+- **Abstract Interfaces** - `GraphStore`, `VectorStore`, `QueryEngine`
 - **Dependency Injection** - Passed via constructors
-- **Async/Await** - Throughout (FastAPI, Neo4j, ChromaDB)
+- **Async/Await** - Throughout (FastAPI, MMapGraphStore, vector store)
 - **Immutable Models** - msgspec.Struct with `frozen=True`
 - **Handler Pattern** - JSON-RPC handlers with MethodHandler base
 
@@ -377,8 +372,8 @@ FastAPI                   Safety, Merkle            Async CRUD
 
 ### Requirements
 - Python 3.11+ (required for `X | Y` unions, `tomllib`, etc.)
-- Neo4j database
-- ChromaDB vector store
+- No external database: graph lives in `.smpg` files, vectors (optional, BYO) in `.smpv`
+- Optional: Redis (`SMP_REDIS_URL`) for distributed rate limiting
 
 ### Setup
 ```bash
@@ -395,9 +390,13 @@ mypy smp/                   # Type check
 
 ### Running Service
 ```bash
-python3.11 -m smp.cli serve              # FastAPI server
-python3.11 -m smp.cli ingest <dir>       # Parse directory
-python3.11 -m smp.protocol.mcp           # MCP server (stdio)
+smp serve --port 8420                 # JSON-RPC over HTTP (POST /rpc)
+smp ingest <dir>                      # Parse directory (structural only, no embeddings)
+smp mcp                               # MCP server over stdio
+smp backup --output backup.tar.gz     # Snapshot graph to gzipped tarball (+ manifest.json)
+smp restore --input backup.tar.gz     # Restore graph from backup
+smp compact                           # Rewrite journal, drop obsolete records
+smp integrity                         # Full on-disk integrity check
 ```
 
 ### Pre-Commit Checklist

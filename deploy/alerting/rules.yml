@@ -1,0 +1,38 @@
+groups:
+  - name: smp_alerts
+    rules:
+      - alert: HighErrorRate
+        expr: sum(rate(smp_rpc_errors_total[5m])) / sum(rate(smp_rpc_requests_total[5m])) > 0.01
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High RPC error rate"
+          description: "RPC error rate is above 1% for the last 5 minutes."
+
+      - alert: HighLatency
+        expr: sum(rate(smp_rpc_duration_seconds_sum[5m])) / sum(rate(smp_rpc_duration_seconds_count[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High RPC latency"
+          description: "Average RPC latency is above 1s for the last 5 minutes."
+
+      - alert: JournalSizeHigh
+        expr: smp_journal_size_bytes / (10 * 1024 * 1024 * 1024) > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Journal size high"
+          description: "Journal size is above 80% of the 10GB limit."
+
+      - alert: InstanceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "SMP instance down"
+          description: "SMP instance has been unreachable for more than 1 minute."

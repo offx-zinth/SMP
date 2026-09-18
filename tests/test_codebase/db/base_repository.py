@@ -12,7 +12,7 @@ class BaseRepository(ABC, Generic[T]):
     Defines standard CRUD operations for entities.
     """
 
-    def __init__(self, connection_string: str):
+    def __init__(self, connection_string: str) -> None:
         """
         Initializes the repository with a database connection string.
 

@@ -30,28 +30,28 @@ async def diff(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/diff``."""
     p = msgspec.convert(params, DiffParams)
     engine = ctx["engine"]
-    return await engine.diff(p.from_snapshot, p.to_snapshot, p.scope)
+    return await engine.diff(p.from_snapshot, p.to_snapshot, p.scope)  # type: ignore[no-any-return]
 
 
 async def plan(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/plan``."""
     p = msgspec.convert(params, PlanParams)
     engine = ctx["engine"]
-    return await engine.plan(p.change_description, p.target_file, p.change_type, p.scope)
+    return await engine.plan(p.change_description, p.target_file, p.change_type, p.scope)  # type: ignore[no-any-return]
 
 
 async def conflict(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/conflict``."""
     p = msgspec.convert(params, ConflictParams)
     engine = ctx["engine"]
-    return await engine.conflict(p.entity, p.proposed_change, p.context)
+    return await engine.conflict(p.entity, p.proposed_change, p.context)  # type: ignore[no-any-return]
 
 
 async def why(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/why``."""
     p = msgspec.convert(params, WhyParams)
     engine = ctx["engine"]
-    return await engine.why(p.entity, p.relationship, p.depth)
+    return await engine.why(p.entity, p.relationship, p.depth)  # type: ignore[no-any-return]
 
 
 async def _hot_nodes(graph: Any, threshold: int, top_k: int) -> list[dict[str, Any]]:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -104,11 +105,14 @@ class TestBackupRestore:
         await store.upsert_nodes([_node("a"), _node("b")])
         await store.upsert_edge(GraphEdge(source_id="a", target_id="b", type=EdgeType.CALLS))
 
-        snapshot = tmp_path / "snap.smpg"
+        snapshot = tmp_path / "snap.tar.gz"
         await backup(store, snapshot)
         await store.close()
 
-        clone = MMapGraphStore(snapshot)
+        clone_path = tmp_path / "snap_restored.smpg"
+        await restore(clone_path, snapshot)
+
+        clone = MMapGraphStore(clone_path)
         await clone.connect()
         try:
             assert await clone.count_nodes() == 2
@@ -250,7 +254,7 @@ class TestMetricsEndpoint:
     def test_metrics_record_failures(self, http: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         from smp.protocol import server as server_module
 
-        async def bomb(*_, **__):  # type: ignore[no-untyped-def]
+        async def bomb(*_: Any, **__: Any) -> None:  # type: ignore[no-untyped-def]
             raise ValueError("boom")
 
         monkeypatch.setitem(server_module._HANDLERS, "smp/search", bomb)

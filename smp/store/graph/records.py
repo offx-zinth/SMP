@@ -20,7 +20,6 @@ import msgspec
 
 from smp.core.models import GraphEdge, GraphNode
 
-
 # -- Node / edge -----------------------------------------------------------
 
 

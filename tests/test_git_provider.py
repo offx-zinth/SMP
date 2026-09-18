@@ -16,7 +16,6 @@ from smp.runtime.git_provider import (
     provider_from_env,
 )
 
-
 # ---------------------------------------------------------------------------
 # Null provider
 # ---------------------------------------------------------------------------
@@ -25,9 +24,7 @@ from smp.runtime.git_provider import (
 class TestNullProvider:
     async def test_returns_synthetic_record(self) -> None:
         provider = NullGitProvider()
-        record = await provider.create_pull_request(
-            title="t", body="b", branch="feature/x", base_branch="main"
-        )
+        record = await provider.create_pull_request(title="t", body="b", branch="feature/x", base_branch="main")
         assert record.provider == "null"
         assert record.pr_id.startswith("pr_")
         assert record.url.startswith("smp://null/")
@@ -80,13 +77,18 @@ class TestLocalProvider:
         # Branch exists with the new file
         result = subprocess.run(
             ["git", "log", "-1", "--name-only", "--pretty=format:", "feature/hello"],
-            cwd=git_repo, capture_output=True, text=True, check=True
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         assert "hello.txt" in result.stdout
 
     async def test_no_files_means_no_commit(self, git_repo: Path) -> None:
         provider = LocalGitProvider(git_repo)
-        before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True, check=True).stdout.strip()
+        before = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=git_repo, capture_output=True, text=True, check=True
+        ).stdout.strip()
         record = await provider.create_pull_request(
             title="empty", body="", branch="feature/empty", base_branch="main", files={}
         )
@@ -100,7 +102,10 @@ class TestLocalProvider:
         provider = LocalGitProvider(git_repo)
         with pytest.raises(ValueError, match="escapes repository"):
             await provider.create_pull_request(
-                title="bad", body="", branch="feature/bad", base_branch="main",
+                title="bad",
+                body="",
+                branch="feature/bad",
+                base_branch="main",
                 files={"../escape.txt": "no"},
             )
 
@@ -139,9 +144,7 @@ class TestGitHubProvider:
             {"number": 42, "html_url": "https://github.com/o/r/pull/42", "created_at": "2025-04-25T00:00:00Z"}
         )
         provider = GitHubProvider(repo="o/r", token="ghs_test", opener=opener)
-        record = await provider.create_pull_request(
-            title="feat", body="body", branch="feature/x", base_branch="main"
-        )
+        record = await provider.create_pull_request(title="feat", body="body", branch="feature/x", base_branch="main")
         assert record.provider == "github"
         assert record.number == 42
         assert record.url == "https://github.com/o/r/pull/42"
@@ -173,9 +176,7 @@ class TestProviderFromEnv:
         provider = provider_from_env()
         assert isinstance(provider, LocalGitProvider)
 
-    def test_local_falls_back_when_repo_missing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_local_falls_back_when_repo_missing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SMP_GIT_PROVIDER", "local")
         monkeypatch.setenv("SMP_LOCAL_REPO", str(tmp_path / "absent"))
         provider = provider_from_env()
@@ -252,9 +253,7 @@ class TestPrCreateHandler:
                 "builder": DefaultGraphBuilder(store),
                 "_git_provider": BoomProvider(),
             }
-            result = await pr_create(
-                {"title": "t", "body": "", "branch": "x", "base_branch": "main"}, ctx
-            )
+            result = await pr_create({"title": "t", "body": "", "branch": "x", "base_branch": "main"}, ctx)
             assert result["created"] is False
             assert result["error"] == "git_provider_error"
             assert "network down" in result["detail"]

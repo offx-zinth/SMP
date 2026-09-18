@@ -9,6 +9,7 @@ def authenticate_user(email, password):
         return "token_123"
     return None
 
+
 def register_user(email, password):
     """Creates a new user account."""
     data = {"email": email, "password": password}

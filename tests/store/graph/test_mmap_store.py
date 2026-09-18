@@ -1,4 +1,5 @@
 import pytest
+
 from smp.core.models import EdgeType, GraphEdge, GraphNode, NodeType, SemanticProperties, StructuralProperties
 from smp.store.graph.mmap_store import MMapGraphStore
 

@@ -34,10 +34,13 @@ that received each surviving record once, in order.
 
 from __future__ import annotations
 
+import io
+import json
 import os
 import shutil
+import tarfile
 import tempfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -48,16 +51,37 @@ from smp.logging import get_logger
 
 log = get_logger(__name__)
 
+#: Version of the backup envelope format written by :func:`backup`.
+BACKUP_FORMAT_VERSION: int = 1
+
+#: Magic bytes at the start of every raw ``.smpg`` graph file.
+_GRAPH_MAGIC: bytes = b"SMPG"
+
 
 def _ts() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _manifest_for(store: MMapGraphStore, graph_bytes: int, data_end: int) -> dict[str, object]:
+    return {
+        "format": "smp-backup",
+        "backup_version": BACKUP_FORMAT_VERSION,
+        "graph_format": "SMPG v1",
+        "created_at": datetime.now(UTC).isoformat(),
+        "source_path": str(store.path),
+        "graph_bytes": graph_bytes,
+        "data_end": data_end,
+        "nodes": len(store._nodes),  # noqa: SLF001
+        "edges": sum(len(v) for v in store._edges.values()),  # noqa: SLF001
+    }
 
 
 async def backup(store: MMapGraphStore, target: Path | str) -> Path:
-    """Copy the live ``.smpg`` file to ``target`` consistently.
+    """Snapshot the live ``.smpg`` file to ``target`` as a gzipped tarball.
 
-    The snapshot captures only the bytes up to ``data_end`` at the
-    moment of capture, so partial writes cannot corrupt the backup.
+    The archive contains the raw graph snapshot (a strict prefix of the
+    live file, so always a valid graph) plus a ``manifest.json`` with
+    checksums and version metadata. Use :func:`restore` to extract it.
 
     The store may be left open during this call.
     """
@@ -69,52 +93,121 @@ async def backup(store: MMapGraphStore, target: Path | str) -> Path:
     data_end = store.file.data_region_end
     file_size = store.file.size
 
-    # Always copy the full file (header + WAL + data region up to file size)
-    # The data_end pointer in the header bounds where journal records live.
-    bytes_to_copy = file_size
-
+    # Capture a consistent prefix of the live file: bytes up to file_size
+    # at capture time form a valid graph by construction.
     with open(src, "rb") as fh:
-        with tempfile.NamedTemporaryFile("wb", delete=False, dir=str(target_path.parent), suffix=".tmp") as tmp:
-            tmp_path = Path(tmp.name)
-            remaining = bytes_to_copy
-            while remaining > 0:
-                chunk = fh.read(min(remaining, 1 << 20))
-                if not chunk:
-                    break
-                tmp.write(chunk)
-                remaining -= len(chunk)
-    os.replace(tmp_path, target_path)
+        snapshot = fh.read(file_size)
+
+    manifest = _manifest_for(store, len(snapshot), data_end)
+    manifest_bytes = json.dumps(manifest, indent=2).encode("utf-8")
+    member_name = src.name or "graph.smpg"
+
+    with tempfile.NamedTemporaryFile("wb", delete=False, dir=str(target_path.parent), suffix=".tmp") as tmp:
+        tmp_path = Path(tmp.name)
+    try:
+        with tarfile.open(tmp_path, "w:gz") as tar:
+            graph_info = tarfile.TarInfo(name=member_name)
+            graph_info.size = len(snapshot)
+            graph_info.mtime = int(datetime.now(UTC).timestamp())
+            tar.addfile(graph_info, io.BytesIO(snapshot))
+            manifest_info = tarfile.TarInfo(name="manifest.json")
+            manifest_info.size = len(manifest_bytes)
+            manifest_info.mtime = graph_info.mtime
+            tar.addfile(manifest_info, io.BytesIO(manifest_bytes))
+        os.replace(tmp_path, target_path)
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
     log.info(
         "backup_complete",
         src=str(src),
         dst=str(target_path),
-        bytes=bytes_to_copy,
+        bytes=len(snapshot),
         data_end=data_end,
     )
     return target_path
 
 
+def _extract_snapshot(source: Path) -> tuple[bytes, dict[str, object]]:
+    """Return ``(graph_bytes, manifest)`` from a backup file.
+
+    Raises
+    ------
+    ValueError
+        If ``source`` is neither a valid backup tarball nor a raw
+        ``.smpg`` snapshot.
+    """
+    try:
+        with tarfile.open(source, "r:gz") as tar:
+            return _read_snapshot_from_tar(source, tar)
+    except (tarfile.ReadError, OSError):
+        raw = source.read_bytes()
+        if raw[: len(_GRAPH_MAGIC)] == _GRAPH_MAGIC:
+            return raw, {}
+        raise ValueError(f"not a recognized SMP backup: {source}") from None
+
+
+def _read_snapshot_from_tar(source: Path, tar: tarfile.TarFile) -> tuple[bytes, dict[str, object]]:
+    """Extract the graph snapshot and manifest from an open backup tarball."""
+    try:
+        members = tar.getmembers()
+    except (tarfile.ReadError, EOFError) as exc:
+        raise ValueError(f"unreadable SMP backup archive: {source} ({exc})") from None
+    manifest: dict[str, object] = {}
+    for member in members:
+        if member.name == "manifest.json" and member.isfile():
+            extracted = tar.extractfile(member)
+            if extracted is not None:
+                try:
+                    manifest = json.loads(extracted.read().decode("utf-8"))
+                except (ValueError, UnicodeDecodeError):
+                    manifest = {}
+            break
+    for member in members:
+        if member.isfile() and (member.name.endswith(".smpg") or member.name == "graph.smpg"):
+            extracted = tar.extractfile(member)
+            if extracted is not None:
+                return extracted.read(), manifest
+    version = manifest.get("version", manifest.get("backup_version", "unknown"))
+    raise ValueError(f"backup archive contains no graph snapshot (manifest version: {version})")
+
+
 async def restore(target: Path | str, source: Path | str) -> Path:
-    """Atomically replace ``target`` with ``source``.
+    """Restore ``target`` from the backup at ``source``.
+
+    Accepts archives written by :func:`backup` as well as raw ``.smpg``
+    snapshots (backward compatibility). A timestamped sidecar copy of
+    any existing target is left at ``<target>.bak.<ts>``.
 
     The target SMP service must already be stopped — this function does
-    not coordinate with a running store.  A timestamped sidecar copy of
-    the previous file is left at ``<target>.bak.<ts>`` so an operator
-    can roll back without rerunning the backup tool.
+    not coordinate with a running store.
     """
     target_path = Path(target)
     source_path = Path(source)
     if not source_path.exists():
         raise FileNotFoundError(source_path)
 
+    snapshot, _manifest = await _read_snapshot(source_path)
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
     if target_path.exists():
         sidecar = target_path.with_suffix(target_path.suffix + f".bak.{_ts()}")
         shutil.copy2(target_path, sidecar)
         log.info("restore_sidecar_written", path=str(sidecar))
 
-    shutil.copyfile(source_path, target_path)
+    with tempfile.NamedTemporaryFile("wb", delete=False, dir=str(target_path.parent), suffix=".tmp") as tmp:
+        tmp.write(snapshot)
+        tmp_path = Path(tmp.name)
+    os.replace(tmp_path, target_path)
     log.info("restore_complete", src=str(source_path), dst=str(target_path))
     return target_path
+
+
+async def _read_snapshot(source: Path) -> tuple[bytes, dict[str, object]]:
+    """Read a backup file off the event loop's thread pool boundary."""
+    import asyncio
+
+    return await asyncio.get_running_loop().run_in_executor(None, _extract_snapshot, source)
 
 
 async def compact(store: MMapGraphStore) -> dict[str, int]:

@@ -34,7 +34,7 @@ import urllib.error
 import urllib.request
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -44,7 +44,7 @@ log = get_logger(__name__)
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 @dataclass
@@ -207,9 +207,13 @@ class LocalGitProvider(GitProvider):
         if status.stdout.strip():
             message = title if not body else f"{title}\n\n{body}"
             self._git(
-                "-c", f"user.email={self.author.split('<')[-1].rstrip('>').strip() or 'smp@local'}",
-                "-c", f"user.name={self.author.split('<')[0].strip() or 'smp'}",
-                "commit", "-m", message,
+                "-c",
+                f"user.email={self.author.split('<')[-1].rstrip('>').strip() or 'smp@local'}",
+                "-c",
+                f"user.name={self.author.split('<')[0].strip() or 'smp'}",
+                "commit",
+                "-m",
+                message,
             )
 
         rev = self._git("rev-parse", "HEAD").stdout.strip()

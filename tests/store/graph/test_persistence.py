@@ -34,7 +34,9 @@ from smp.store.graph.mmap_file import (
 from smp.store.graph.mmap_store import MMapGraphStore
 
 
-def _make_node(node_id: str, name: str, file_path: str = "src/auth.py", node_type: NodeType = NodeType.FUNCTION) -> GraphNode:
+def _make_node(
+    node_id: str, name: str, file_path: str = "src/auth.py", node_type: NodeType = NodeType.FUNCTION
+) -> GraphNode:
     return GraphNode(
         id=node_id,
         type=node_type,

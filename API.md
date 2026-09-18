@@ -150,7 +150,7 @@ Retrieves all `CALLS_RUNTIME` edges for a node (captured via eBPF trace executio
 
 ## Enrichment & Annotation
 
-Extract static metadata (docstrings, type hints) and generate semantic search indexes without LLMs.
+Extract static metadata (docstrings, type hints) and build keyword search indexes without LLMs.
 
 ### `smp/enrich`
 Extracts static metadata from a specific node's AST.
@@ -183,14 +183,14 @@ Bulk-apply or remove tags across a structural scope.
   * `action` (string): `"add"`, `"remove"`, or `"replace"`.
 
 ### `smp/search`
-BM25-ranked full-text search against the enriched neo4j index.
+Keyword search against names, docstrings, descriptions, tags, IDs, and file paths in the mmap graph store.
 
 * **Params:**
-  * `query` (string): Keywords.
+  * `query` (string): Keywords (split on whitespace).
   * `match` (string): `"all"` (AND) or `"any"` (OR).
   * `filter` (object, optional): `node_types`, `tags`, `scope`.
   * `top_k` (integer): Result limit.
-* **Result:** Array of matched nodes with their `bm25_score`.
+* **Result:** Array of matched nodes with their keyword `score`.
 
 ---
 
@@ -250,29 +250,30 @@ Detect if two active agent sessions overlap in scope.
 
 ---
 
-## Community Detection (Graph RAG)
+## Community Detection
 
-Topology-based codebase partitioning and semantic routing.
+Connected-component partitioning of the codebase graph for architectural overviews.
 
 ### `smp/community/detect`
-Runs the Louvain algorithm to partition the graph into Coarse (L0) and Fine (L1) communities. Calculates centroid embeddings for routing.
+Partitions the graph into connected components over the selected relationship types.
 
 * **Params:**
-  * `algorithm` (string): `"louvain"`.
-  * `relationship_types` (array of strings).
-  * `levels` (array of objects defining `resolution`).
+  * `resolutions` (array of objects, optional): Retained for compatibility; the deepest level sets the stored level.
+  * `relationship_types` (array of strings, optional): Edge types to traverse (defaults to all).
 * **Result:** Community discovery statistics and hierarchies.
 
 ### `smp/locate`
-The primary code discovery endpoint. Uses Community-Routed Graph RAG.
+The primary code discovery endpoint. Keyword matching over names, docstrings, and tags, then ranked by score.
 
 * **Params:**
-  * `query` (string): Natural language.
-  * `seed_k` (int, default: 3): Initial ChromaDB vector seeds.
-  * `hops` (int, default: 2): Graph traversal depth from seeds.
+  * `query` (string): Keywords.
+  * `fields` (array of strings, default: `["name", "docstring", "tags"]`): Fields to match against.
+  * `node_types` (array of strings, optional): Filter by node type.
   * `top_k` (int, default: 10): Final ranked limit.
-  * `community_id` (string, optional): Bypass Phase 0 auto-routing.
-* **Result:** `LocateResponse` containing a ranked list based on composite scoring (Vector + PageRank + Heat) and a `structural_map`.
+* **Result:** Ranked matches with `matched_on`, docstring, and tags.
+
+Vector similarity search is available separately via `smp/vector/*` and requires caller-supplied embeddings
+(bring-your-own-embeddings — ingest does not create embeddings).
 
 ### `smp/community/boundaries`
 Calculates coupling strength between domain architectures.

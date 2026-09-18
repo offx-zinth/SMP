@@ -8,7 +8,7 @@ class UserManager:
     Manages user-related business logic.
     """
 
-    def __init__(self, user_repo: UserRepository):
+    def __init__(self, user_repo: UserRepository) -> None:
         """
         Initializes the UserManager.
 

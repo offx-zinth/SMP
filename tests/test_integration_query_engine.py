@@ -22,7 +22,6 @@ from smp.core.models import (
 from smp.engine.query import DefaultQueryEngine
 from smp.store.graph.mmap_store import MMapGraphStore
 
-
 # ---------------------------------------------------------------------------
 # Test fixture: a small, hand-built graph
 # ---------------------------------------------------------------------------
@@ -151,9 +150,7 @@ class TestNavigate:
         assert entity.get("name") == "func_a"
 
     async def test_with_relationships(self, seeded_engine: DefaultQueryEngine) -> None:
-        result = await seeded_engine.navigate(
-            "file.py::Function::func_a::4", include_relationships=True
-        )
+        result = await seeded_engine.navigate("file.py::Function::func_a::4", include_relationships=True)
         rels = result["relationships"]
         for key in ("calls", "called_by", "depends_on", "imported_by"):
             assert key in rels
@@ -173,9 +170,7 @@ class TestTrace:
         result = await seeded_engine.trace("file.py::Function::func_a::4", "CALLS", depth=2)
         assert isinstance(result, list)
 
-    async def test_nodes_have_dict_structure(
-        self, seeded_engine: DefaultQueryEngine
-    ) -> None:
+    async def test_nodes_have_dict_structure(self, seeded_engine: DefaultQueryEngine) -> None:
         result = await seeded_engine.trace("file.py::Function::func_a::4", "CALLS", depth=2)
         for node in result:
             assert isinstance(node, dict)
@@ -259,28 +254,20 @@ class TestAssessImpact:
 
 class TestFindFlow:
     async def test_returns_dict(self, seeded_engine: DefaultQueryEngine) -> None:
-        result = await seeded_engine.find_flow(
-            "file.py::Function::func_a::4", "file.py::Function::func_c::16"
-        )
+        result = await seeded_engine.find_flow("file.py::Function::func_a::4", "file.py::Function::func_c::16")
         assert isinstance(result, dict)
 
     async def test_has_expected_fields(self, seeded_engine: DefaultQueryEngine) -> None:
-        result = await seeded_engine.find_flow(
-            "file.py::Function::func_a::4", "file.py::Function::func_c::16"
-        )
+        result = await seeded_engine.find_flow("file.py::Function::func_a::4", "file.py::Function::func_c::16")
         assert "path" in result
         assert "data_transformations" in result
 
     async def test_same_node(self, seeded_engine: DefaultQueryEngine) -> None:
-        result = await seeded_engine.find_flow(
-            "file.py::Function::func_a::4", "file.py::Function::func_a::4"
-        )
+        result = await seeded_engine.find_flow("file.py::Function::func_a::4", "file.py::Function::func_a::4")
         assert len(result["path"]) == 1
 
     async def test_direct_path(self, seeded_engine: DefaultQueryEngine) -> None:
-        result = await seeded_engine.find_flow(
-            "file.py::Function::func_a::4", "file.py::Function::func_b::10"
-        )
+        result = await seeded_engine.find_flow("file.py::Function::func_a::4", "file.py::Function::func_b::10")
         path_names = [n["node"] for n in result["path"]]
         assert "func_a" in path_names or "file.py::Function::func_a::4" in path_names
 
@@ -291,9 +278,7 @@ class TestFindFlow:
 
 
 class TestQueryEngineSmoke:
-    async def test_navigate_and_trace_work_together(
-        self, seeded_engine: DefaultQueryEngine
-    ) -> None:
+    async def test_navigate_and_trace_work_together(self, seeded_engine: DefaultQueryEngine) -> None:
         nav = await seeded_engine.navigate("file.py::Function::func_a::4")
         assert "entity" in nav
 

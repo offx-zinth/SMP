@@ -57,6 +57,7 @@ import numpy as np
 
 from smp.logging import get_logger
 from smp.store.interfaces import VectorStore
+from smp.vector.faiss_index import FaissIndex
 
 log = get_logger(__name__)
 
@@ -115,6 +116,9 @@ class MMapVectorStore(VectorStore):
         self._documents: list[str] = []
         self._tombstones: list[bool] = []
         self._id_to_slot: dict[str, int] = {}
+        self._index: FaissIndex | None = None
+        self._index_stale: bool = True
+        self._index_slots: list[int] = []
 
         self._lock = asyncio.Lock()
         self._connected = False
@@ -124,6 +128,12 @@ class MMapVectorStore(VectorStore):
     async def connect(self) -> None:
         await asyncio.get_running_loop().run_in_executor(None, self._open_blocking)
         self._connected = True
+
+        # Initialize FAISS index if dimension is known
+        if self._dim > 0:
+            self._index = FaissIndex(self._dim)
+            await self._build_index()
+
         log.info(
             "mmap_vector_connected",
             path=str(self._path),
@@ -131,6 +141,28 @@ class MMapVectorStore(VectorStore):
             slots=len(self._ids),
             live=self._live_count(),
         )
+
+    async def _build_index(self) -> None:
+        """Rebuild the FAISS index from durable mmap storage."""
+        if not self._index:
+            return
+
+        self._index.reset()
+        self._index_slots = []
+        live_slots = [i for i, t in enumerate(self._tombstones) if not t]
+        if not live_slots:
+            self._index_stale = False
+            return
+
+        # Batch read vectors for FAISS
+        vectors = np.empty((len(live_slots), self._dim), dtype=np.float32)
+        for i, slot in enumerate(live_slots):
+            vectors[i] = self._read_vector(slot)
+
+        self._index.add(vectors)
+        self._index_slots = list(live_slots)
+        self._index_stale = False
+        log.info("mmap_vector_index_built", count=len(live_slots))
 
     async def close(self) -> None:
         if not self._connected:
@@ -143,6 +175,10 @@ class MMapVectorStore(VectorStore):
         self._require_connected()
         async with self._lock:
             await asyncio.get_running_loop().run_in_executor(None, self._clear_blocking)
+            if self._index is not None:
+                self._index.reset()
+            self._index_slots = []
+            self._index_stale = False
         log.info("mmap_vector_cleared", path=str(self._path))
 
     # -- CRUD ------------------------------------------------------------------
@@ -163,6 +199,12 @@ class MMapVectorStore(VectorStore):
             return
 
         async with self._lock:
+            # 1. Check for updates before durable upsert
+            has_updates = False
+            if self._index:
+                has_updates = any(id_ in self._id_to_slot for id_ in ids)
+
+            # 2. Durable upsert
             await asyncio.get_running_loop().run_in_executor(
                 None,
                 self._upsert_blocking,
@@ -171,6 +213,25 @@ class MMapVectorStore(VectorStore):
                 [dict(m) for m in metadatas],
                 list(documents) if documents is not None else None,
             )
+
+            # 3. Incremental FAISS update
+            if self._dim > 0 and self._index is None:
+                self._index = FaissIndex(self._dim)
+                await self._build_index()
+            elif self._index:
+                if has_updates:
+                    self._index_stale = True
+                else:
+                    # Only add new vectors; track slot mapping for FAISS positions.
+                    new_vectors = np.array(embeddings, dtype=np.float32)
+                    self._index.add(new_vectors)
+                    new_ids = list(ids)
+                    for entry_id in new_ids:
+                        slot = self._id_to_slot.get(entry_id)
+                        if slot is not None:
+                            self._index_slots.append(slot)
+                    self._index_stale = False
+
         log.info("mmap_vector_upserted", count=len(ids))
 
     async def query(
@@ -180,8 +241,40 @@ class MMapVectorStore(VectorStore):
         where: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         self._require_connected()
+        if len(embedding) != self._dim:
+            raise ValueError(f"Query embedding dim mismatch: expected {self._dim}, got {len(embedding)}")
         if top_k <= 0:
             return []
+
+        # FORCE FAISS for benchmark testing
+        use_faiss = self._index is not None and where is None and not self._index_stale
+        if use_faiss and self._index is not None:
+            query_vec = np.asarray(embedding, dtype=np.float32).reshape(1, -1)
+            distances, indices = self._index.search(query_vec, top_k)
+
+            results = []
+            for dist, idx in zip(distances, indices, strict=False):
+                if idx == -1:
+                    continue
+                pos = int(idx)
+                if pos < 0 or pos >= len(self._index_slots):
+                    continue
+                slot = self._index_slots[pos]
+                if slot < 0 or slot >= len(self._ids) or self._tombstones[slot]:
+                    continue
+                # FAISS returns squared L2 on normalized vectors: d^2 = 2*(1-cos).
+                # Convert to cosine distance (1-cos) for consistency with linear scan.
+                results.append(
+                    {
+                        "id": self._ids[slot],
+                        "score": float(dist) / 2.0,
+                        "metadata": dict(self._metadatas[slot]),
+                        "document": self._documents[slot],
+                    }
+                )
+            return results
+
+        # 2. Fallback to linear scan for filters or stale index
         return await asyncio.get_running_loop().run_in_executor(
             None,
             self._query_blocking,
@@ -192,10 +285,13 @@ class MMapVectorStore(VectorStore):
 
     async def get(self, ids: Sequence[str]) -> list[dict[str, Any] | None]:
         self._require_connected()
+        if isinstance(ids, str):
+            ids = [ids]
         results: list[dict[str, Any] | None] = []
         for entry_id in ids:
             slot = self._id_to_slot.get(entry_id)
             if slot is None or self._tombstones[slot]:
+                results.append(None)
                 continue
             results.append(
                 {
@@ -208,10 +304,14 @@ class MMapVectorStore(VectorStore):
 
     async def delete(self, ids: Sequence[str]) -> int:
         self._require_connected()
+        if isinstance(ids, str):
+            ids = [ids]
         if not ids:
             return 0
         async with self._lock:
             removed = await asyncio.get_running_loop().run_in_executor(None, self._delete_blocking, list(ids))
+            if removed > 0 and self._index:
+                self._index_stale = True
         log.info("mmap_vector_deleted", count=removed)
         return removed
 
@@ -219,6 +319,8 @@ class MMapVectorStore(VectorStore):
         self._require_connected()
         async with self._lock:
             removed = await asyncio.get_running_loop().run_in_executor(None, self._delete_by_file_blocking, file_path)
+            if removed > 0 and self._index:
+                self._index_stale = True
         log.info("mmap_vector_deleted_by_file", file_path=file_path, count=removed)
         return removed
 
@@ -504,10 +606,28 @@ class MMapVectorStore(VectorStore):
         q_norm = float(np.linalg.norm(query_vec)) or 1.0
         query_unit = query_vec / q_norm
 
-        # Bulk read live vectors for efficient batched dot product.
-        rows = np.empty((len(live_slots), self._dim), dtype=np.float32)
-        for i, slot in enumerate(live_slots):
-            rows[i] = self._read_vector(slot)
+        # Optimized batch read of all live vectors
+        # We read the entire region from the first live slot to the last,
+        # then filter out tombstones/non-matches in-memory.
+        # This is much faster than individual mmap reads.
+
+        start_slot = live_slots[0]
+        end_slot = live_slots[-1]
+
+        start_off = self._slot_offset(start_slot)
+        end_off = self._slot_offset(end_slot) + self._dim * FLOAT_SIZE
+
+        # Read the contiguous block of memory
+        assert self._mmap is not None, "mmap must be connected"
+        block = self._mmap[start_off:end_off]
+        all_vecs = np.frombuffer(block, dtype=np.float32).reshape(-1, self._dim)
+
+        # We only want the vectors corresponding to live_slots
+        # The block contains vectors for all slots from start_slot to end_slot
+        # Map live_slots relative to start_slot
+        rel_slots = [s - start_slot for s in live_slots]
+        rows = all_vecs[rel_slots]
+
         norms = np.linalg.norm(rows, axis=1)
         norms = np.where(norms == 0, 1.0, norms)
         units = rows / norms[:, None]

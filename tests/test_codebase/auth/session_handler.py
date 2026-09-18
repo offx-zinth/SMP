@@ -9,7 +9,7 @@ class SessionHandler:
     Handles user sessions and authentication state.
     """
 
-    def __init__(self, jwt_utils: JWTUtils, user_repo: UserRepository):
+    def __init__(self, jwt_utils: JWTUtils, user_repo: UserRepository) -> None:
         """
         Initializes the SessionHandler.
 

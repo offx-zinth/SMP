@@ -5,7 +5,7 @@ This guide provides practical instructions for using SMP to analyze, navigate, a
 ## 🌟 What can you do with SMP?
 
 SMP is designed to help you (or your AI agents) answer structural questions that traditional search cannot:
-- **"Where is the logic for X implemented?"** $\rightarrow$ Use `locate` (Graph RAG).
+- **"Where is the logic for X implemented?"** $\rightarrow$ Use `locate` (keyword search).
 - **"If I change this function, what else will break?"** $\rightarrow$ Use `assess_impact` (Blast Radius).
 - **"How does data flow from the API to the Database?"** $\rightarrow$ Use `trace` (Call Graph).
 - **"What are the main architectural modules of this project?"** $\rightarrow$ Use `community/list`.
@@ -58,7 +58,7 @@ asyncio.run(main())
 ```
 
 ### Feature Location (`locate`)
-Use this to find the "seed" of a feature using semantic and structural search.
+Use this to find the entry point of a feature using keyword and structural search.
 ```python
 results = await client.locate("payment gateway integration")
 for res in results.results:
@@ -105,5 +105,5 @@ As you change your code, the graph can become "stale."
 | Issue | Solution |
 | :--- | :--- |
 | **`SyntaxError` or `ImportError`** | Ensure you are using **Python 3.11**. |
-| **Neo4j Connection Failure** | Check your `.env` file and ensure the Neo4j container is running (`docker ps`). |
+| **Graph file won't open** | Check `SMP_GRAPH_PATH` (default `.smp/graph.smpg`); run `smp ingest` first. |
 | **Empty Search Results** | Ensure you ran `smp ingest` and that the project has docstrings/type annotations for the enricher to find. |

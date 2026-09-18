@@ -36,7 +36,7 @@ import tempfile
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from smp.logging import get_logger
@@ -48,7 +48,7 @@ _DEFAULT_OUTPUT_BYTES: int = 1 * 1024 * 1024
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 @dataclass
@@ -147,7 +147,7 @@ class SandboxRuntime:
 
         execution_id = f"exec_{uuid.uuid4().hex[:10]}"
         started_at = _now_iso()
-        clock_start = datetime.now(timezone.utc)
+        clock_start = datetime.now(UTC)
         timed_out = False
         truncated = False
         stdout_bytes = b""
@@ -200,7 +200,7 @@ class SandboxRuntime:
                 stdout_bytes, stderr_bytes = await asyncio.wait_for(
                     proc.communicate(input=input_bytes), timeout=timeout
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 timed_out = True
                 with contextlib.suppress(ProcessLookupError):
                     proc.kill()
@@ -217,7 +217,7 @@ class SandboxRuntime:
             truncated = True
 
         ended_at = _now_iso()
-        clock_end = datetime.now(timezone.utc)
+        clock_end = datetime.now(UTC)
         result = ExecutionResult(
             execution_id=execution_id,
             sandbox_id=sandbox_id,

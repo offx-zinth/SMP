@@ -21,6 +21,7 @@ can serialise records without managing geometry.
 
 from __future__ import annotations
 
+import contextlib
 import mmap
 import os
 import struct
@@ -137,19 +138,14 @@ class MMapFile:
             self._validate_header()
             self._data_end = self._read_data_end()
             if self._data_end < DATA_REGION_START or self._data_end > self._size:
-                raise ValueError(
-                    f"Corrupt data_end pointer: {self._data_end} "
-                    f"(file size={self._size})"
-                )
+                raise ValueError(f"Corrupt data_end pointer: {self._data_end} (file size={self._size})")
             self.replay_wal()
 
     def close(self) -> None:
         """Flush and close the file."""
         if self.mmap is not None:
-            try:
+            with contextlib.suppress(ValueError, OSError):
                 self.mmap.flush()
-            except (ValueError, OSError):
-                pass
             self.mmap.close()
             self.mmap = None
         if self.fd != -1:
@@ -186,6 +182,19 @@ class MMapFile:
         self.update_header_crc()
         self.flush()
 
+    def truncate_to(self, offset: int) -> None:
+        """Truncate the data region to ``offset`` (recovery from corruption).
+
+        Bytes at and beyond ``offset`` are abandoned; the header's
+        ``data_end`` pointer is rewound accordingly so subsequent appends
+        overwrite the corrupt tail.
+        """
+        clamped = max(DATA_REGION_START, min(int(offset), self._data_end))
+        self._data_end = clamped
+        self._write_data_end(clamped)
+        self.update_header_crc()
+        self.flush()
+
     def flush(self) -> None:
         """Flush dirty pages to disk."""
         if self.mmap is not None:
@@ -195,10 +204,8 @@ class MMapFile:
         """Force kernel-level fsync of the underlying fd."""
         self.flush()
         if self.fd != -1:
-            try:
+            with contextlib.suppress(OSError):
                 os.fsync(self.fd)
-            except OSError:
-                pass
 
     # -- WAL -------------------------------------------------------------
 
@@ -234,9 +241,7 @@ class MMapFile:
             if self._wal_start + pos + 7 > self._wal_end:
                 break
             rtype = self.mmap[self._wal_start + pos]
-            length = struct.unpack(
-                "<I", self.mmap[self._wal_start + pos + 3 : self._wal_start + pos + 7]
-            )[0]
+            length = struct.unpack("<I", self.mmap[self._wal_start + pos + 3 : self._wal_start + pos + 7])[0]
             crc_pos = self._wal_start + pos + 7
             crc_stored = struct.unpack("<I", self.mmap[crc_pos : crc_pos + 4])[0]
             payload_pos = crc_pos + 4
@@ -300,8 +305,7 @@ class MMapFile:
         actual_crc = zlib.crc32(header_data) & 0xFFFFFFFF
         if actual_crc != stored_crc:
             raise ValueError(
-                f"Header CRC mismatch (stored=0x{stored_crc:08x}, "
-                f"actual=0x{actual_crc:08x}); file may be corrupt"
+                f"Header CRC mismatch (stored=0x{stored_crc:08x}, actual=0x{actual_crc:08x}); file may be corrupt"
             )
 
     def update_header_crc(self) -> None:

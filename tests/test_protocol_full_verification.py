@@ -127,9 +127,10 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from smp.core.models import EdgeType, NodeType
+from smp.core.models import EdgeType, GraphEdge, GraphNode, NodeType, StructuralProperties
 from smp.engine.graph_builder import DefaultGraphBuilder
 from smp.engine.query import DefaultQueryEngine
+from smp.protocol.auth import AuthPolicy
 from smp.protocol.handlers import (
     analysis as analysis_handlers,
 )
@@ -160,7 +161,34 @@ from smp.protocol.handlers import (
 from smp.protocol.server import _HANDLERS, _dispatch, create_app
 from smp.store.graph.mmap_store import MMapGraphStore
 
-from .conftest import make_edge, make_node
+
+def make_node(
+    id: str = "func_login",
+    type: NodeType = NodeType.FUNCTION,
+    file_path: str = "src/auth/login.py",
+) -> GraphNode:
+    """Plain node factory (fixtures cannot be called directly)."""
+    name = id
+    for prefix in ("func_", "cls_"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    return GraphNode(
+        id=id,
+        type=type,
+        file_path=file_path,
+        structural=StructuralProperties(name=name, file=file_path, start_line=1, end_line=10),
+    )
+
+
+def make_edge(
+    source: str = "func_login",
+    target: str = "func_validate",
+    edge_type: EdgeType = EdgeType.CALLS,
+) -> GraphEdge:
+    """Plain edge factory (fixtures cannot be called directly)."""
+    return GraphEdge(source_id=source, target_id=target, type=edge_type)
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -223,7 +251,7 @@ def http_client(tmp_path: Path) -> Iterator[TestClient]:
     runs (``MMapGraphStore.connect``/``close``).
     """
     graph_path = tmp_path / "graph.smpg"
-    app = create_app(graph_path=str(graph_path))
+    app = create_app(graph_path=str(graph_path), auth_policy=AuthPolicy(open_mode=True))
     with TestClient(app) as client:
         yield client
 
@@ -844,9 +872,9 @@ class TestDispatchRegistryCoverage:
     """Ensure every method in ``_HANDLERS`` is covered by this module."""
 
     def test_handler_count_matches_inventory(self) -> None:
-        # Sanity: 49 methods are documented in this module's traceability table.
+        # Sanity: 52 methods are documented in this module's traceability table.
         # If a new handler is added without a test, this number must change.
-        assert len(_HANDLERS) == 49
+        assert len(_HANDLERS) == 52
 
 
 # ---------------------------------------------------------------------------
@@ -1177,6 +1205,8 @@ class TestEdgeCases:
         assert result["updated"] >= 1
 
     async def test_enrich_skips_already_enriched_without_force(self, seeded_ctx: dict[str, Any]) -> None:
+        first = await enrichment_handlers.enrich({"node_id": "func_login"}, seeded_ctx)
+        assert first["enriched"] is True
         result = await enrichment_handlers.enrich({"node_id": "func_login"}, seeded_ctx)
         assert result["enriched"] is False
         assert result["skipped"] is True

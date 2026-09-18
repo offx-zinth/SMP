@@ -422,6 +422,14 @@ class SearchParams(msgspec.Struct):
     top_k: int = 5
 
 
+class VectorSearchParams(msgspec.Struct):
+    """Parameters for smp/vector/search."""
+
+    embedding: list[float]
+    top_k: int = 5
+    where: dict[str, Any] = msgspec.field(default_factory=dict)
+
+
 class FlowParams(msgspec.Struct):
     """Parameters for smp/flow."""
 

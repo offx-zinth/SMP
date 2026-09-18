@@ -24,8 +24,9 @@ This guide will walk you through the setup, coding standards, and workflows requ
 
 ### Prerequisites
 - **Python 3.11+** (Strict requirement for `X | Y` unions, `tomllib`, and `msgspec` optimizations)
-- **Docker** (Required for spawning agent sandboxes and running Testcontainers for DBs)
-- **Neo4j Desktop** or Neo4j Docker image (Must include the **Graph Data Science (GDS)** plugin for Louvain and PageRank).
+- **No external database** — the graph is a self-contained `.smpg` file (`MMapGraphStore`); vectors are
+  optional bring-your-own embeddings (`.smpv`). No Neo4j, no ChromaDB.
+- **Docker** (Optional — only for sandbox-related experiments, not required for tests)
 
 ### Installation
 1. **Clone & Create a Virtual Environment:**
@@ -46,7 +47,8 @@ This guide will walk you through the setup, coding standards, and workflows requ
    ```bash
    cp .env.example .env
    ```
-   *Note: Make sure `NEO4J_URI` points to an instance with the GDS plugin enabled.*
+    *Note: `SMP_GRAPH_PATH` points at the `.smpg` graph file (default `.smp/graph.smpg`); `SMP_VECTOR_PATH`
+    points at the optional `.smpv` vector file. There are no database credentials to configure.*
 
 ---
 
@@ -55,7 +57,9 @@ This guide will walk you through the setup, coding standards, and workflows requ
 Before writing code, please read the [ARCHITECTURE.md](ARCHITECTURE.md). 
 
 **Key rules to remember:**
-- **No LLMs at Query Time:** Do not add external API calls to OpenAI/Anthropic inside the query engine (`SeedWalkEngine`). Relevance is calculated via graph math (Vector + PageRank + HeatScore).
+- **Keyword search only:** Do not add embedding generation, vector seeding, BM25, or PageRank/Louvain to the
+  query engine. `smp/locate` / `smp/search` relevance is plain keyword scoring over names, docstrings,
+  descriptions, tags, IDs, and file paths. Vectors are bring-your-own via `smp/vector/*` only.
 - **Immutability First:** Data flowing through the system must be immutable. We use `msgspec.Struct` with `frozen=True`.
 - **Agents are untrusted:** Any endpoint touching the filesystem must go through the Sandbox and `smp/guard/check`.
 
@@ -120,19 +124,22 @@ async def handle_telemetry_hot(params: dict, ctx: ServerContext) -> dict:
 
 ### Modifying the Graph Schema
 If you add a new node type or relationship type (e.g., `IMPLEMENTS`):
-1. Update the schema documentation in `ARCHITECTURE.md`.
-2. Update the `NodeTypes` or `EdgeTypes` Enums in `smp/core/constants.py`.
-3. Add any required Neo4j index constraints in `smp/core/store.py` (e.g., `CREATE INDEX IF NOT EXISTS FOR (n:NewType) ON (n.id)`).
+1. Update the `NodeType` or `EdgeType` enums in `smp/core/models.py`.
+2. Update the parser in `smp/store/graph/parser.py` if the new type needs AST extraction.
+3. Add storage/query handling in `smp/store/graph/mmap_store.py` as needed.
 
 ---
 
 ## 🧪 Testing Guidelines
 
-We use **pytest** and `pytest-asyncio`. Graph databases and vector stores present unique testing challenges.
+We use **pytest** and `pytest-asyncio`. The stores are self-contained files, so tests need no live services.
 
-1. **Unit Tests:** Should mock Neo4j and ChromaDB. Use these for testing logic (e.g., ranking math in `SeedWalkEngine._rank`).
-2. **Integration Tests:** Found in `tests/integration/`. These require actual databases. The CI pipeline uses Testcontainers to spin up ephemeral Neo4j and ChromaDB instances.
-3. **Writing Cypher in Tests:** When testing Cypher queries, always clean up the graph state in a `finally` block or use a fresh database schema per test.
+1. **Unit Tests:** Should use tmp-dir `MMapGraphStore` / `MMapVectorStore` fixtures from `tests/conftest.py`.
+   Use mocks only for testing pure logic (e.g., keyword scoring in the query engine's `locate`/`search`).
+2. **Integration Tests:** Found in `tests/`. These run against real `.smpg` / `.smpv` files in tmp dirs —
+   no Testcontainers, no external databases.
+3. **Graph state in Tests:** Always isolate per test via the `clean_graph` / `graph_store` fixtures (fresh tmp-dir
+   store per test); never share a graph file between tests.
 
 **Running Tests:**
 ```bash
@@ -180,5 +187,5 @@ pytest
 - Push your branch to your fork.
 - Open a PR against the `main` branch.
 - Fill out the PR template provided in `.github/PULL_REQUEST_TEMPLATE.md`.
-- Ensure your PR title matches the Conventional Commits format (e.g., `feat: implement eBPF trace extraction`).
+- Ensure your PR title matches the Conventional Commits format (e.g., `feat: add placeholder linking pass`).
 - Wait for a maintainer (or a designated Reviewer Agent) to review your code!

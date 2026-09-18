@@ -8,11 +8,16 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
 from smp.store.graph.mmap_store import MMapGraphStore
 from smp.store.graph.watcher import (
     DEFAULT_DEBOUNCE_SECONDS,
     FileWatcher,
 )
+
+# Skip if tree-sitter is not available
+tree_sitter = pytest.importorskip("tree_sitter_languages", reason="tree-sitter required for watcher tests")
 
 EVENT_WAIT_SECONDS: float = 5.0
 SETTLE_SECONDS: float = 0.5

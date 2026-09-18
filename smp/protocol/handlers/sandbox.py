@@ -12,6 +12,7 @@ so the wire shape is preserved.
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 import msgspec
@@ -23,6 +24,20 @@ from smp.runtime.sandbox import SandboxRuntime, get_runtime
 log = get_logger(__name__)
 
 
+def _is_command_allowed(command: list[str]) -> bool:
+    """Check if the command is in the allowlist defined by SMP_SANDBOX_ALLOWED_COMMANDS."""
+    allowed_env = os.environ.get("SMP_SANDBOX_ALLOWED_COMMANDS")
+    if not allowed_env:
+        return True  # Default to allow all if not configured
+
+    allowed_cmds = [c.strip() for c in allowed_env.split(",") if c.strip()]
+    if not command:
+        return False
+
+    # Check if the base command (first element) is allowed
+    return command[0] in allowed_cmds
+
+
 def _runtime(ctx: dict[str, Any]) -> SandboxRuntime:
     return get_runtime(ctx)
 
@@ -32,7 +47,11 @@ async def sandbox_spawn(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str
     p = msgspec.convert(params, SandboxSpawnParams)
     runtime = _runtime(ctx)
 
-    handle = await runtime.spawn(name=p.name, template=p.template, files=dict(p.files))
+    handle = await runtime.spawn(
+        name=p.name or "",
+        template=p.template or "",
+        files=dict(p.files),
+    )
 
     return {
         "sandbox_id": handle.sandbox_id,
@@ -64,6 +83,15 @@ async def sandbox_execute(params: dict[str, Any], ctx: dict[str, Any]) -> dict[s
             "sandbox_id": p.sandbox_id,
             "started": False,
             "error": "empty_command",
+        }
+
+    if not _is_command_allowed(list(p.command)):
+        log.warning("sandbox_execute_command_forbidden", command=p.command)
+        return {
+            "execution_id": "",
+            "sandbox_id": p.sandbox_id,
+            "started": False,
+            "error": "command_forbidden",
         }
 
     timeout = float(p.timeout or 30.0)

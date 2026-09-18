@@ -11,15 +11,43 @@ from __future__ import annotations
 
 import pytest
 
-from smp.core.models import EdgeType, NodeType
+from smp.core.models import EdgeType, GraphNode, NodeType, StructuralProperties
 from smp.engine.graph_builder import DefaultGraphBuilder
 from smp.engine.query import DefaultQueryEngine
 from smp.protocol.handlers import memory as memory_handlers
 from smp.protocol.handlers import query as query_handlers
-from smp.protocol.server import _MethodNotFoundError, _dispatch
+from smp.protocol.server import _dispatch, _MethodNotFoundError
 from smp.store.graph.mmap_store import MMapGraphStore
 
-from .conftest import make_edge, make_node
+
+def make_node(
+    id: str = "func_login",
+    type: NodeType = NodeType.FUNCTION,
+    file_path: str = "src/auth/login.py",
+) -> GraphNode:
+    """Plain node factory (fixtures cannot be called directly)."""
+    name = id
+    for prefix in ("func_", "cls_"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    return GraphNode(
+        id=id,
+        type=type,
+        file_path=file_path,
+        structural=StructuralProperties(name=name, file=file_path, start_line=1, end_line=10),
+    )
+
+
+def make_edge(
+    source: str = "func_login",
+    target: str = "func_validate",
+    edge_type: EdgeType = EdgeType.CALLS,
+):
+    """Plain edge factory (fixtures cannot be called directly)."""
+    from smp.core.models import GraphEdge
+
+    return GraphEdge(source_id=source, target_id=target, type=edge_type)
 
 
 @pytest.fixture()
@@ -33,9 +61,7 @@ async def seeded_ctx(clean_graph: MMapGraphStore) -> dict[str, object]:
     )
     await clean_graph.upsert_node(login)
     await clean_graph.upsert_node(validate)
-    await clean_graph.upsert_edge(
-        make_edge(source="func_login", target="func_validate", edge_type=EdgeType.CALLS)
-    )
+    await clean_graph.upsert_edge(make_edge(source="func_login", target="func_validate", edge_type=EdgeType.CALLS))
 
     engine = DefaultQueryEngine(graph_store=clean_graph)
     builder = DefaultGraphBuilder(clean_graph)
@@ -51,16 +77,12 @@ class TestQueryHandlers:
     """The ``smp/navigate`` … ``smp/flow`` handler functions."""
 
     async def test_navigate_returns_entity(self, seeded_ctx: dict[str, object]) -> None:
-        result = await query_handlers.navigate(
-            {"query": "func_login", "include_relationships": True}, seeded_ctx
-        )
+        result = await query_handlers.navigate({"query": "func_login", "include_relationships": True}, seeded_ctx)
         assert isinstance(result, dict)
         assert "entity" in result
 
     async def test_trace_returns_node_list(self, seeded_ctx: dict[str, object]) -> None:
-        result = await query_handlers.trace(
-            {"start": "func_login", "relationship": "CALLS", "depth": 2}, seeded_ctx
-        )
+        result = await query_handlers.trace({"start": "func_login", "relationship": "CALLS", "depth": 2}, seeded_ctx)
         assert isinstance(result, dict)
         assert "nodes" in result
         assert isinstance(result["nodes"], list)
@@ -70,9 +92,7 @@ class TestQueryHandlers:
         assert isinstance(result, dict)
 
     async def test_impact_returns_dict(self, seeded_ctx: dict[str, object]) -> None:
-        result = await query_handlers.impact(
-            {"entity": "func_login", "change_type": "delete"}, seeded_ctx
-        )
+        result = await query_handlers.impact({"entity": "func_login", "change_type": "delete"}, seeded_ctx)
         assert isinstance(result, dict)
 
     async def test_locate_returns_matches(self, seeded_ctx: dict[str, object]) -> None:
@@ -85,9 +105,7 @@ class TestQueryHandlers:
         assert isinstance(result, dict)
 
     async def test_flow_returns_dict(self, seeded_ctx: dict[str, object]) -> None:
-        result = await query_handlers.flow(
-            {"start": "func_login", "end": "func_validate"}, seeded_ctx
-        )
+        result = await query_handlers.flow({"start": "func_login", "end": "func_validate"}, seeded_ctx)
         assert isinstance(result, dict)
         assert "path" in result
 
@@ -100,9 +118,7 @@ class TestQueryHandlers:
 class TestMemoryHandlers:
     """The ``smp/update``, ``smp/batch_update``, ``smp/reindex`` handlers."""
 
-    async def test_update_returns_status_envelope(
-        self, seeded_ctx: dict[str, object], tmp_path
-    ) -> None:
+    async def test_update_returns_status_envelope(self, seeded_ctx: dict[str, object], tmp_path) -> None:
         # Use a path that does not exist; update should still produce a
         # well-formed envelope, since MMapGraphStore tolerates unknown files.
         target = tmp_path / "missing.py"
@@ -112,13 +128,9 @@ class TestMemoryHandlers:
         for key in ("nodes", "edges", "errors"):
             assert key in result
 
-    async def test_batch_update_aggregates_results(
-        self, seeded_ctx: dict[str, object], tmp_path
-    ) -> None:
+    async def test_batch_update_aggregates_results(self, seeded_ctx: dict[str, object], tmp_path) -> None:
         files = [tmp_path / f"f{i}.py" for i in range(3)]
-        result = await memory_handlers.batch_update(
-            {"changes": [{"file_path": str(p)} for p in files]}, seeded_ctx
-        )
+        result = await memory_handlers.batch_update({"changes": [{"file_path": str(p)} for p in files]}, seeded_ctx)
         assert result["updates"] == 3
         assert len(result["results"]) == 3
 
@@ -169,9 +181,7 @@ class TestServerDispatch:
             "smp/reindex",
         ],
     )
-    async def test_known_methods_are_dispatched(
-        self, seeded_ctx: dict[str, object], method: str
-    ) -> None:
+    async def test_known_methods_are_dispatched(self, seeded_ctx: dict[str, object], method: str) -> None:
         # We don't assert the exact shape — only that the method is recognised
         # (i.e. ``_MethodNotFoundError`` is *not* raised).
         try:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 
@@ -47,21 +46,15 @@ class TestSandboxExecute:
             template="python",
             files={"hello.py": "import sys; print('hello'); sys.exit(0)"},
         )
-        result = await runtime.execute(
-            sandbox_id=handle.sandbox_id, command=[sys.executable, "hello.py"], timeout=10
-        )
+        result = await runtime.execute(sandbox_id=handle.sandbox_id, command=[sys.executable, "hello.py"], timeout=10)
         assert result.status == "completed"
         assert result.exit_code == 0
         assert "hello" in result.stdout
         assert result.stderr == ""
 
     async def test_failing_exit_code_marks_failed(self, runtime: SandboxRuntime) -> None:
-        handle = await runtime.spawn(
-            name="t", template="python", files={"die.py": "import sys; sys.exit(7)"}
-        )
-        result = await runtime.execute(
-            sandbox_id=handle.sandbox_id, command=[sys.executable, "die.py"], timeout=10
-        )
+        handle = await runtime.spawn(name="t", template="python", files={"die.py": "import sys; sys.exit(7)"})
+        result = await runtime.execute(sandbox_id=handle.sandbox_id, command=[sys.executable, "die.py"], timeout=10)
         assert result.status == "failed"
         assert result.exit_code == 7
 
@@ -85,9 +78,7 @@ class TestSandboxExecute:
             template="python",
             files={"loop.py": "import time\nwhile True: time.sleep(0.05)"},
         )
-        result = await runtime.execute(
-            sandbox_id=handle.sandbox_id, command=[sys.executable, "loop.py"], timeout=1.0
-        )
+        result = await runtime.execute(sandbox_id=handle.sandbox_id, command=[sys.executable, "loop.py"], timeout=1.0)
         assert result.timed_out is True
         assert result.status == "timeout"
 
@@ -108,14 +99,12 @@ class TestSandboxExecute:
             template="python",
             files={"big.py": "print('A' * 10000)"},
         )
-        result = await runtime.execute(
-            sandbox_id=handle.sandbox_id, command=[sys.executable, "big.py"], timeout=10
-        )
+        result = await runtime.execute(sandbox_id=handle.sandbox_id, command=[sys.executable, "big.py"], timeout=10)
         assert result.truncated is True
         assert len(result.stdout) <= 1024
 
     async def test_cwd_isolation(self, runtime: SandboxRuntime) -> None:
-        a = await runtime.spawn(name="a", template="python", files={"only_a.txt": "secret-a"})
+        await runtime.spawn(name="a", template="python", files={"only_a.txt": "secret-a"})
         b = await runtime.spawn(name="b", template="python", files={"only_b.txt": "secret-b"})
         # b cannot see a's files
         result = await runtime.execute(
@@ -132,12 +121,8 @@ class TestSandboxKill:
         assert await runtime.kill("nope") is False
 
     async def test_kill_is_idempotent(self, runtime: SandboxRuntime) -> None:
-        handle = await runtime.spawn(
-            name="t", template="python", files={"q.py": "print('quick')"}
-        )
-        result = await runtime.execute(
-            sandbox_id=handle.sandbox_id, command=[sys.executable, "q.py"], timeout=5
-        )
+        handle = await runtime.spawn(name="t", template="python", files={"q.py": "print('quick')"})
+        result = await runtime.execute(sandbox_id=handle.sandbox_id, command=[sys.executable, "q.py"], timeout=5)
         assert await runtime.kill(result.execution_id) is True
         # Killing again is still a successful no-op
         assert await runtime.kill(result.execution_id) is True
@@ -148,9 +133,7 @@ class TestProtocolHandlers:
         from smp.protocol.handlers import sandbox as sandbox_handlers
 
         ctx: dict[str, object] = {"_sandbox_runtime": SandboxRuntime(root=tmp_path)}
-        spawned = await sandbox_handlers.sandbox_spawn(
-            {"name": "t", "files": {"main.py": "print('done')"}}, ctx
-        )
+        spawned = await sandbox_handlers.sandbox_spawn({"name": "t", "files": {"main.py": "print('done')"}}, ctx)
         assert spawned["sandbox_id"].startswith("sbx_")
         assert spawned["file_count"] == 1
 
@@ -166,9 +149,7 @@ class TestProtocolHandlers:
         assert "done" in executed["stdout"]
         assert executed["exit_code"] == 0
 
-        killed = await sandbox_handlers.sandbox_kill(
-            {"execution_id": executed["execution_id"]}, ctx
-        )
+        killed = await sandbox_handlers.sandbox_kill({"execution_id": executed["execution_id"]}, ctx)
         assert killed["killed"] is True
 
     async def test_empty_command_rejected(self, tmp_path: Path) -> None:
@@ -176,8 +157,6 @@ class TestProtocolHandlers:
 
         ctx: dict[str, object] = {"_sandbox_runtime": SandboxRuntime(root=tmp_path)}
         spawned = await sandbox_handlers.sandbox_spawn({"name": "t"}, ctx)
-        result = await sandbox_handlers.sandbox_execute(
-            {"sandbox_id": spawned["sandbox_id"], "command": []}, ctx
-        )
+        result = await sandbox_handlers.sandbox_execute({"sandbox_id": spawned["sandbox_id"], "command": []}, ctx)
         assert result["started"] is False
         assert result["error"] == "empty_command"

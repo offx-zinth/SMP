@@ -145,12 +145,12 @@ for filename, stats in results.items():
 ```python
 from smp.parser.registry import ParserRegistry
 from smp.engine.graph_builder import DefaultGraphBuilder
-from smp.store.graph.neo4j_store import Neo4jGraphStore
+from smp.store.graph.mmap_store import MMapGraphStore
 import asyncio
 
 async def ingest_codebase():
     registry = ParserRegistry()
-    store = Neo4jGraphStore()
+    store = MMapGraphStore(path=".smp/graph.smpg")  # self-contained mmap journal, no external DB
     builder = DefaultGraphBuilder(store)
     
     await store.connect()

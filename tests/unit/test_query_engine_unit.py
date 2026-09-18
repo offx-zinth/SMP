@@ -8,6 +8,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
 from smp.core.models import (
     EdgeType,
     GraphEdge,
@@ -174,6 +175,8 @@ class TestTrace:
         """Create a mock graph store."""
         store = MagicMock()
         store.traverse = AsyncMock(return_value=[])
+        store.get_node = AsyncMock(return_value=make_node("func_a", NodeType.FUNCTION, "a.py", "a"))
+        store.find_nodes = AsyncMock(return_value=[])
         return store
 
     @pytest.mark.asyncio

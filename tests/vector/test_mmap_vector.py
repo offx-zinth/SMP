@@ -141,7 +141,8 @@ class TestGet:
     async def test_get_skips_missing_ids(self, store: MMapVectorStore) -> None:
         await store.upsert(ids=["a"], embeddings=[_VEC_A], metadatas=[{}])
         results = await store.get(["a", "ghost"])
-        assert [r["id"] for r in results] == ["a"]
+        assert [r["id"] for r in results if r is not None] == ["a"]
+        assert results[1] is None
 
 
 class TestQuery:
@@ -224,7 +225,7 @@ class TestDelete:
     async def test_get_after_delete_returns_empty(self, store: MMapVectorStore) -> None:
         await store.upsert(ids=["rm"], embeddings=[_VEC_A], metadatas=[{}])
         await store.delete(["rm"])
-        assert await store.get(["rm"]) == []
+        assert await store.get(["rm"]) == [None]
 
     async def test_query_skips_tombstoned(self, store: MMapVectorStore) -> None:
         await store.upsert(
@@ -282,7 +283,8 @@ class TestPersistence:
             assert s2.dimension == _DIM
             assert len(s2) == 1
             results = await s2.get(["a", "b"])
-            assert [r["id"] for r in results] == ["a"]
+            assert [r["id"] for r in results if r is not None] == ["a"]
+            assert results[1] is None
             top = await s2.query(embedding=_VEC_A, top_k=5)
             assert {r["id"] for r in top} == {"a"}
         finally:
@@ -317,7 +319,7 @@ class TestClear:
         )
         await store.clear()
         assert len(store) == 0
-        assert await store.get(["a", "b"]) == []
+        assert await store.get(["a", "b"]) == [None, None]
 
     async def test_clear_allows_reuse(self, store: MMapVectorStore) -> None:
         await store.upsert(ids=["a"], embeddings=[_VEC_A], metadatas=[{}])

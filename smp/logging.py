@@ -61,7 +61,7 @@ def configure_logging(*, json: bool = False, level: str = "INFO") -> None:
 
 def get_logger(name: str) -> structlog.stdlib.BoundLogger:
     """Return a bound structlog logger scoped to *name*."""
-    return structlog.get_logger(name)
+    return structlog.get_logger(name)  # type: ignore[no-any-return]
 
 
 # Auto-configure with dev defaults on first import.

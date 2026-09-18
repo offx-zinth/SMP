@@ -15,7 +15,7 @@ that:
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -129,9 +129,7 @@ class TestStaleLockRecovery:
 
 
 class TestDurableAudit:
-    async def test_audit_events_durable_across_restart(
-        self, durable_ctx: tuple[dict[str, Any], Path]
-    ) -> None:
+    async def test_audit_events_durable_across_restart(self, durable_ctx: tuple[dict[str, Any], Path]) -> None:
         ctx, path = durable_ctx
         s1 = await session_open({"agent_id": "a", "task": "review"}, ctx)
         await lock({"session_id": s1["session_id"], "files": ["src/q.py"]}, ctx)
@@ -166,9 +164,7 @@ class TestDurableAudit:
 
 
 class TestLeaseShape:
-    async def test_lease_carries_fencing_token_and_expiry(
-        self, durable_ctx: tuple[dict[str, Any], Path]
-    ) -> None:
+    async def test_lease_carries_fencing_token_and_expiry(self, durable_ctx: tuple[dict[str, Any], Path]) -> None:
         ctx, _ = durable_ctx
         s = await session_open({"agent_id": "a"}, ctx)
         result = await lock({"session_id": s["session_id"], "files": ["src/p.py"], "ttl_seconds": 60}, ctx)
@@ -178,6 +174,6 @@ class TestLeaseShape:
         # expires_at is a parseable ISO timestamp in the near future
         deadline = datetime.fromisoformat(lease["expires_at"])
         if deadline.tzinfo is None:
-            deadline = deadline.replace(tzinfo=timezone.utc)
-        assert deadline > datetime.now(timezone.utc)
-        assert deadline < datetime.now(timezone.utc) + timedelta(minutes=2)
+            deadline = deadline.replace(tzinfo=UTC)
+        assert deadline > datetime.now(UTC)
+        assert deadline < datetime.now(UTC) + timedelta(minutes=2)

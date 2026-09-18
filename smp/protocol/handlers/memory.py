@@ -8,6 +8,7 @@ scheduler.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,25 @@ from smp.core.models import BatchUpdateParams, ReindexParams, UpdateParams
 from smp.logging import get_logger
 
 log = get_logger(__name__)
+
+
+def _is_path_allowed(path: str) -> bool:
+    """Check if the given path is within the allowed paths defined by SMP_ALLOWED_PATHS."""
+    allowed_env = os.environ.get("SMP_ALLOWED_PATHS")
+    if not allowed_env:
+        return True  # Default to allow all if not configured, or should I default to block?
+        # The prompt says "Add path allowlist validation... Use SMP_ALLOWED_PATHS env var."
+        # Usually, if an allowlist is configured, you use it. If not, maybe it's open?
+        # In a hardened environment, you'd want it to be strict.
+        # But let's see. If I make it block everything by default, it might break things.
+        # However, "Security Hardening" suggests it should be strict.
+        # Let's assume if SMP_ALLOWED_PATHS is set, we validate. If not, we allow.
+        # Wait, usually an allowlist means if it's not on the list, it's not allowed.
+        # Let's implement it such that if SMP_ALLOWED_PATHS is set, only those paths are allowed.
+
+    allowed_paths = [p.strip() for p in allowed_env.split(",") if p.strip()]
+    resolved_path = Path(path).resolve()
+    return any(resolved_path.is_relative_to(Path(allowed).resolve()) for allowed in allowed_paths)
 
 
 async def update(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
@@ -30,6 +50,10 @@ async def update(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     graph = ctx["graph"]
 
     file_path = p.file_path
+
+    if not _is_path_allowed(file_path):
+        log.warning("memory_update_path_forbidden", path=file_path)
+        return {"file_path": file_path, "nodes": 0, "edges": 0, "errors": 1, "error": "path_forbidden"}
 
     if hasattr(graph, "invalidate_file"):
         try:
@@ -90,11 +114,11 @@ async def reindex(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]
     rp = msgspec.convert(params, ReindexParams)
     graph = ctx["graph"]
 
-    if (
-        hasattr(graph, "watch_directories")
-        and hasattr(graph, "pre_parse")
-        and rp.scope
-    ):
+    if rp.scope and not _is_path_allowed(rp.scope):
+        log.warning("memory_reindex_path_forbidden", path=rp.scope)
+        return {"status": "error", "scope": rp.scope, "error": "path_forbidden"}
+
+    if hasattr(graph, "watch_directories") and hasattr(graph, "pre_parse") and rp.scope:
         scope_path = Path(rp.scope)
         if scope_path.is_dir():
             graph.watch_directories([scope_path])

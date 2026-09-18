@@ -22,8 +22,9 @@ agents crash without releasing.
 
 from __future__ import annotations
 
+import contextlib
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import msgspec
@@ -44,7 +45,7 @@ log = get_logger(__name__)
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 def _now_iso() -> str:
@@ -87,12 +88,15 @@ async def _persist_session(graph: Any, session: dict[str, Any]) -> None:
 
 async def _load_session(graph: Any, ctx: dict[str, Any], session_id: str) -> dict[str, Any] | None:
     try:
-        loaded = await graph.get_session(session_id)
+        loaded: dict[str, Any] | None = await graph.get_session(session_id)
     except (NotImplementedError, AttributeError):
         loaded = None
     if loaded:
         return loaded
-    return _session_store(ctx).get(session_id)
+    store_val = _session_store(ctx).get(session_id)
+    if store_val:
+        return store_val
+    return None
 
 
 async def _record_audit(graph: Any, ctx: dict[str, Any], event: dict[str, Any]) -> None:
@@ -118,7 +122,7 @@ def _is_lock_stale(info: dict[str, Any], at: datetime) -> bool:
     except ValueError:
         return False
     if deadline.tzinfo is None:
-        deadline = deadline.replace(tzinfo=timezone.utc)
+        deadline = deadline.replace(tzinfo=UTC)
     return deadline < at
 
 
@@ -242,10 +246,8 @@ async def session_close(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str
             locks.pop(fp, None)
             released += 1
 
-    try:
+    with contextlib.suppress(NotImplementedError, AttributeError):
         await graph.delete_session(p.session_id)
-    except (NotImplementedError, AttributeError):
-        pass
     _session_store(ctx).pop(p.session_id, None)
     await _record_audit(
         graph,
@@ -434,7 +436,13 @@ async def lock(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
                 "fencing_token": lease.get("fencing_token", 0),
             },
         )
-        locked.append({"file": file_path, "fencing_token": lease.get("fencing_token", 0), "expires_at": lease.get("expires_at", "")})
+        locked.append(
+            {
+                "file": file_path,
+                "fencing_token": lease.get("fencing_token", 0),
+                "expires_at": lease.get("expires_at", ""),
+            }
+        )
 
     session = await _load_session(graph, ctx, p.session_id)
     if session is not None:

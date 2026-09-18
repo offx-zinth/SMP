@@ -10,7 +10,7 @@ demo runs).
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import msgspec
@@ -29,7 +29,7 @@ log = get_logger(__name__)
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 def _review_store(ctx: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -111,9 +111,7 @@ async def review_reject(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str
     if review is None:
         return {"review_id": p.review_id, "rejected": False, "error": "review_not_found"}
 
-    review.setdefault("rejections", []).append(
-        {"reviewer": p.reviewer, "reason": p.reason, "ts": _now_iso()}
-    )
+    review.setdefault("rejections", []).append({"reviewer": p.reviewer, "reason": p.reason, "ts": _now_iso()})
     review["status"] = "rejected"
     await _persist(graph, review)
 

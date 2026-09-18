@@ -17,9 +17,8 @@ Perfect for AI agents that need to safely understand and modify large codebases.
 ## Installation
 
 ### Prerequisites
-- Python 3.11+ (required)
-- Neo4j database running
-- Optional: ChromaDB for vector search
+- Python 3.11+ (required, see `requires-python = ">=3.11"` in `pyproject.toml`)
+- No external database: the graph is a self-contained `.smpg` file; vectors are optional bring-your-own (`.smpv`)
 
 ### Setup
 ```bash
@@ -33,15 +32,8 @@ source .venv/bin/activate
 # Install in dev mode
 pip install -e ".[dev]"
 
-# Set up environment
+# Set up environment (graph/vector paths, host/port — no DB credentials needed)
 cp .env.example .env
-# Edit .env with your Neo4j credentials
-```
-
-### Docker Compose (Easiest)
-```bash
-docker-compose up -d
-# Starts Neo4j, ChromaDB, and SMP server
 ```
 
 ---
@@ -50,20 +42,20 @@ docker-compose up -d
 
 ### 1. Parse a Codebase
 ```bash
-# Ingest a directory into the graph
-python3.11 -m smp.cli ingest /path/to/your/code
+# Ingest a directory into the graph (structural parsing only — creates NO embeddings)
+smp ingest /path/to/your/code
 
 # Or clear first (for testing)
-python3.11 -m smp.cli ingest /path/to/your/code --clear
+smp ingest /path/to/your/code --clear
 ```
 
 ### 2. Start the Server
 ```bash
-# JSON-RPC API on port 8000
-python3.11 -m smp.cli serve
+# JSON-RPC API on port 8420
+smp serve
 
-# Or MCP server (for Claude Desktop)
-python3.11 -m smp.protocol.mcp
+# Or MCP server over stdio (for Claude Desktop)
+smp mcp
 ```
 
 ### 3. Query the Graph
@@ -72,7 +64,7 @@ Using Python:
 import asyncio
 from smp.client import JsonRpcClient
 
-client = JsonRpcClient("http://localhost:8000")
+client = JsonRpcClient("http://localhost:8420")
 
 # Navigate to a function
 result = await client.call("smp/navigate", {"query": "login"})
@@ -91,12 +83,12 @@ print(result)
 Using cURL:
 ```bash
 # Navigate
-curl -X POST http://localhost:8000/rpc \
+curl -X POST http://localhost:8420/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": 1, "method": "smp/navigate", "params": {"query": "login"}}'
 
 # Get impact of deleting a function
-curl -X POST http://localhost:8000/rpc \
+curl -X POST http://localhost:8420/rpc \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": 2, "method": "smp/impact", "params": {"entity": "login", "change_type": "delete"}}'
 ```
@@ -221,10 +213,10 @@ await client.call("smp/session/close", {
 
 ### Community Operations
 
-**Detect communities (architectural clusters):**
+**Detect communities (connected-component clusters over the call/import graph):**
 ```python
 await client.call("smp/community/detect", {
-    "resolutions": [0.5, 1.0, 2.0]
+    "relationship_types": ["CALLS", "IMPORTS"]
 })
 ```
 
@@ -249,7 +241,7 @@ await client.call("smp/community/get", {
 
 ### Start SMP as MCP Server
 ```bash
-python3.11 -m smp.protocol.mcp
+smp mcp
 ```
 
 ### Add to Claude Desktop
@@ -258,13 +250,12 @@ Edit `~/.config/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "smp": {
-      "command": "python3.11",
-      "args": ["-m", "smp.protocol.mcp"],
+      "command": "smp",
+      "args": ["mcp", "--graph-path", ".smp/graph.smpg"],
       "cwd": "/home/bhagyarekhab/SMP",
       "env": {
-        "SMP_NEO4J_URI": "bolt://localhost:7687",
-        "SMP_NEO4J_USER": "neo4j",
-        "SMP_NEO4J_PASSWORD": "your_password"
+        "SMP_GRAPH_PATH": ".smp/graph.smpg",
+        "SMP_VECTOR_PATH": ".smp/smp.smpv"
       }
     }
   }
@@ -287,11 +278,12 @@ Restart Claude. Now you can use tools like:
 smp/
 ├── core/          Data models (GraphNode, GraphEdge, etc.)
 ├── engine/        Logic (query, graph building, enrichment, community)
-├── parser/        AST extraction (Python, TypeScript)
+├── store/graph/   Parser + memory-mapped journal graph store (.smpg, 14 languages)
+├── vector/        FAISS-backed mmap vector store (.smpv, bring-your-own embeddings)
 ├── protocol/      API layer (FastAPI, JSON-RPC, MCP)
-│   └── handlers/  37+ handler implementations
-├── sandbox/       Isolated execution
-└── store/         Persistence (Neo4j, ChromaDB)
+│   └── handlers/  ~50 smp/* method implementations
+├── runtime/       Child-process sandbox runtime
+└── store/         Persistence (MMapGraphStore, no external DB)
 
 tests/            Comprehensive test suite
 ```
@@ -387,23 +379,24 @@ export SMP_LOG_LEVEL=DEBUG
 python3.11 -m smp.cli serve
 ```
 
-### Inspect the Neo4j graph
+### Inspect the graph file
 ```bash
-# Connect to Neo4j Browser: http://localhost:7474
-# Query all nodes
-MATCH (n) RETURN n LIMIT 100
+# The graph is a self-contained .smpg file — no database browser needed
+ls -la .smp/graph.smpg
 
-# Query specific functions
-MATCH (n:Function) WHERE n.name CONTAINS 'login' RETURN n
+# Full on-disk integrity check
+smp integrity
+
+# Backup to a gzipped tarball (snapshot + manifest.json)
+smp backup --output backup.tar.gz
 ```
 
 ### Test a handler directly
 ```python
-from smp.protocol.handlers.query import NavigateHandler
-handler = NavigateHandler()
-result = await handler.handle(
-    {"query": "login"},
-    {"engine": my_engine}
+from smp.protocol.handlers.query import search
+result = await search(
+    {"query": "login", "match": "any", "top_k": 5},
+    {"engine": my_engine},
 )
 print(result)
 ```
@@ -435,13 +428,13 @@ print(result)
 
 ## Troubleshooting
 
-### Neo4j connection refused
+### Graph file not found / server won't start
 ```bash
-# Check if Neo4j is running
-docker-compose ps
+# Ingest a directory first to create .smp/graph.smpg
+smp ingest /path/to/your/code
 
-# Start Neo4j
-docker-compose up -d neo4j
+# Or point at an existing graph file
+smp serve --graph-path /path/to/graph.smpg
 ```
 
 ### Port already in use

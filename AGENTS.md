@@ -3,10 +3,17 @@
 ## Project Overview
 
 SMP (Structural Memory Protocol) is a graph-based codebase intelligence system for AI agents.
-It parses source code into a knowledge graph (Neo4j) with vector embeddings (ChromaDB),
-exposing a JSON-RPC API via FastAPI.
+It parses source code (14 languages via tree-sitter) into a knowledge graph stored in a
+memory-mapped journal (`.smpg`, no external database), exposing a JSON-RPC API via FastAPI
+and an MCP server over stdio for agents.
 
-**Stack:** Python 3.11+, FastAPI, msgspec, tree-sitter, Neo4j, ChromaDB, pytest.
+**Stack:** Python 3.11+, FastAPI, msgspec, tree-sitter, FAISS, pytest.
+
+**Scope notes:** search is keyword-based (names, docstrings, tags, ids, paths) — there is no
+BM25, no embedding generation, and no semantic/vector seeding. The vector store
+(`smp/vector/`, FAISS-backed `.smpv`) is a bring-your-own-embeddings API: ingest does not
+create embeddings. Cross-file and cross-language call linking is name-based
+(`resolve_placeholders`) and over-approximates by design.
 
 **IMPORTANT:** This project requires **Python 3.11** explicitly. Always use `python3.11` or ensure your virtual environment is created with Python 3.11. The project uses 3.11+ features (`X | Y` unions, `tomllib`, etc.) and ruff/mypy are configured with `target-version = "py311"`.
 
@@ -40,30 +47,20 @@ pytest tests/test_models.py::TestGraphNode
 # Run a single test method
 pytest tests/test_models.py::TestGraphNode::test_defaults
 
-# Run the server
+# Run the server (JSON-RPC over HTTP)
 python3.11 -m smp.cli serve
 
-# Ingest a directory
+# Run the MCP server over stdio (for AI agents)
+python3.11 -m smp.cli mcp
+
+# Ingest a directory (Python, JS/TS, Java, C/C++, C#, Go, Rust, PHP, Ruby, Swift, Kotlin, MATLAB)
 python3.11 -m smp.cli ingest <directory>
 
-# Run a command in background (returns immediately, agent continues working)
-# IMPORTANT: Use full path to venv python3.11 so it can find the smp module
-python3.11 -m smp.cli run <name> -- .venv/bin/python -m <module> [args...]
-# Example: start server in background
-python3.11 -m smp.cli run myserver -- .venv/bin/python -m smp.cli serve --port 8420
-
-# List running background processes
-python3.11 -m smp.cli ps
-
-# View logs for a background process
-python3.11 -m smp.cli logs <name>
-
-# Stop a background process
-python3.11 -m smp.cli stop <name>
-
-# Restart a background process (use --restart flag when running)
-python3.11 -m smp.cli run <name> -- .venv/bin/python -m <module> --restart
-python3.11 -m smp.cli run <name> -- <command> --restart
+# Back up / restore / compact / check the graph
+python3.11 -m smp.cli backup --output <file.tar.gz>
+python3.11 -m smp.cli restore --input <file.tar.gz>
+python3.11 -m smp.cli compact
+python3.11 -m smp.cli integrity
 ```
 
 Always run `ruff check .`, `ruff format .`, and `mypy smp/` after making changes.

@@ -14,6 +14,7 @@ dependencies = [
     "msgspec>=0.19",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
+    "mcp>=1.0",
     "httpx>=0.27",
     "tree-sitter>=0.24",
     "tree-sitter-python>=0.23",
@@ -32,7 +33,10 @@ dependencies = [
     "tree-sitter-matlab>=1.0",
     "python-dotenv>=1.0",
     "structlog>=24.0",
+    "redis>=5.0",
     "watchdog>=4.0",
+    "faiss-cpu>=1.7",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
@@ -42,6 +46,10 @@ dev = [
     "httpx>=0.27",
     "ruff>=0.8",
     "mypy>=1.13",
+    "pytest-benchmark>=4.0",
+    "locust>=2.20",
+    "pytest-cov>=4.1",
+    "pytest-mock>=3.12",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -50,20 +58,29 @@ packages = ["smp"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+norecursedirs = ["__pycache__", ".venv", "fixtures", "test_codebase", ".git", ".mypy_cache", ".ruff_cache"]
 [tool.ruff]
 target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "ANN"]
-ignore = ["ANN101", "ANN102", "ANN401"]
+ignore = ["ANN001", "ANN201", "ANN401", "SIM117"]
+
+[tool.ruff.lint.per-file-ignores]
+# Sample apps ingested by tests — intentionally realistic, not lint-clean.
+"test_realworld/**" = ["ANN", "F841", "SIM"]
+"test_codebase/**" = ["ANN", "F841", "SIM"]
+"tests/test_codebase/**" = ["ANN", "F841", "SIM"]
+"e2e_test_samples/**" = ["ANN", "F841", "SIM"]
+"mcp_eval_project/**" = ["ANN", "F841", "SIM"]
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
 warn_return_any = true
 warn_unused_configs = true
-exclude = ["tests/results"]
+exclude = ["tests/results", "tests"]
 
 [project.scripts]
 smp = "smp.cli:main"

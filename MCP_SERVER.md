@@ -17,7 +17,7 @@ Query and navigate the code knowledge graph:
 - `smp_context` - Extract surrounding context for a file
 - `smp_impact` - Assess the impact of changes
 - `smp_locate` - Find specific code entities
-- `smp_search` - Semantic search using vector embeddings
+- `smp_search` - Keyword search over names, docstrings, descriptions, tags, IDs, and file paths
 - `smp_flow` - Find paths or flows between entities
 - `smp_why` - Explain why relationships exist
 
@@ -69,22 +69,20 @@ Manage handoffs and monitor execution:
 
 ### Prerequisites
 - Python 3.11+
-- Neo4j database running
-- Chroma vector store configured
-- Environment variables set:
-  - `SMP_NEO4J_URI` (default: `bolt://localhost:7687`)
-  - `SMP_NEO4J_USER` (default: `neo4j`)
-  - `SMP_NEO4J_PASSWORD`
+- A graph file (`.smpg`, created via `smp ingest`); no external database required
+- Environment variables (optional, all have defaults):
+  - `SMP_GRAPH_PATH` (default: `.smp/graph.smpg`)
+  - `SMP_VECTOR_PATH` (default: `.smp/smp.smpv`, FAISS-backed bring-your-own-embeddings store)
   - `SMP_SAFETY_ENABLED` (optional: `true`/`false`)
 
 ### Starting the Server
 
 ```bash
 # Start as stdio server (for local use with Claude Desktop)
-python3.11 -m smp.protocol.mcp
+smp mcp --graph-path .smp/graph.smpg
 
 # Or as background process
-python3.11 -m smp.cli run smp-mcp -- python3.11 -m smp.protocol.mcp
+python3.11 -m smp.cli run smp-mcp -- .venv/bin/python -m smp.cli mcp --graph-path .smp/graph.smpg
 ```
 
 ### Claude Desktop Integration
@@ -95,8 +93,8 @@ Add to `claude_desktop_config.json`:
 {
   "mcpServers": {
     "smp": {
-      "command": "python3.11",
-      "args": ["-m", "smp.protocol.mcp"],
+      "command": "smp",
+      "args": ["mcp", "--graph-path", "/path/to/SMP/.smp/graph.smpg"],
       "cwd": "/path/to/SMP"
     }
   }
@@ -107,12 +105,11 @@ Add to `claude_desktop_config.json`:
 
 ### Lifespan Management
 The server uses `app_lifespan()` to:
-1. Initialize Neo4j graph store
-2. Connect Chroma vector store
-3. Create embedding service
-4. Set up query engines and builders
-5. Optionally enable safety features
-6. Provide state to all tools via FastMCP context
+1. Open the memory-mapped journal graph store (`.smpg`)
+2. Connect the FAISS-backed mmap vector store (`.smpv`, bring-your-own-embeddings)
+3. Set up the query engine and graph builder
+4. Optionally enable safety features
+5. Provide state to all tools via FastMCP context
 
 ### Tool Pattern
 Each MCP tool:
@@ -165,10 +162,9 @@ asyncio.run(query_graph())
 
 ### Environment Variables
 ```bash
-# Neo4j
-SMP_NEO4J_URI=bolt://localhost:7687
-SMP_NEO4J_USER=neo4j
-SMP_NEO4J_PASSWORD=your_password
+# Graph / vector store paths (self-contained mmap files, no external DB)
+SMP_GRAPH_PATH=.smp/graph.smpg
+SMP_VECTOR_PATH=.smp/smp.smpv
 
 # Safety Features
 SMP_SAFETY_ENABLED=true
@@ -188,7 +184,8 @@ When `SMP_SAFETY_ENABLED=true`, the following are initialized:
 ## Performance
 
 - **Graph traversal**: O(depth) where depth is user-specified
-- **Vector search**: O(log n) with ChromaDB indexing
+- **Keyword search**: scored term matching over names, docstrings, descriptions, tags, IDs, and file paths
+- **Vector search**: FAISS HNSW over caller-supplied embeddings (bring-your-own-embeddings; ingest creates none)
 - **Enrichment**: Batched for efficiency
 - **Concurrent sessions**: Supported with locking
 
@@ -210,8 +207,8 @@ python3.11 --version
 # Check dependencies
 pip list | grep mcp
 
-# Verify Neo4j connection
-telnet localhost 7687
+# Verify the graph file exists (create it with `smp ingest <dir>` first)
+ls -lh .smp/graph.smpg
 ```
 
 ### Tools not appearing in Claude
@@ -220,9 +217,9 @@ telnet localhost 7687
 - Verify server process is running
 
 ### Performance issues
-- Check `SMP_NEO4J_URI` points to local instance
-- Verify ChromaDB is running
-- Monitor Neo4j memory usage
+- Check `SMP_GRAPH_PATH` points to the local `.smpg` file
+- Check available disk/memory for the memory-mapped stores
+- Monitor graph file size (`smp integrity` can verify on-disk health)
 
 ## Implementation Details
 
@@ -251,7 +248,6 @@ smp/
 - [ ] Incremental graph updates
 - [ ] Machine learning model integration
 - [ ] Custom graph analyzers
-- [ ] Remote Neo4j support with auth
 
 ## Contributing
 

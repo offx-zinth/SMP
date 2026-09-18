@@ -56,8 +56,12 @@ class RecordType(enum.IntEnum):
     ABORT_TX = 0x0E
 
 
-class JournalCorruption(Exception):
+class JournalCorruptionError(Exception):
     """Raised when a record cannot be decoded during replay."""
+
+    def __init__(self, message: str, offset: int | None = None) -> None:
+        super().__init__(message)
+        self.offset = offset
 
 
 class Journal:
@@ -79,11 +83,31 @@ class Journal:
         Returns the absolute byte offset of the record in the file.
         ``fsync=True`` requests a flush after the write.
         """
-        record = self._encode(rtype, payload)
-        offset = self.file.append_data(record)
+        return self.append_batch([(rtype, payload)], fsync=fsync)[0]
+
+    def append_batch(self, records: list[tuple[RecordType, bytes]], *, fsync: bool = False) -> list[int]:
+        """Encode multiple records and append them to the data region in one go.
+
+        Returns a list of absolute byte offsets for each record.
+        """
+        if not records:
+            return []
+
+        encoded_records = [self._encode(rtype, payload) for rtype, payload in records]
+        all_bytes = b"".join(encoded_records)
+
+        start_offset = self.file.append_data(all_bytes)
+
         if fsync:
             self.file.flush()
-        return offset
+
+        offsets: list[int] = []
+        current_offset = start_offset
+        for rec in encoded_records:
+            offsets.append(current_offset)
+            current_offset += len(rec)
+
+        return offsets
 
     @staticmethod
     def _encode(rtype: RecordType, payload: bytes) -> bytes:
@@ -97,7 +121,7 @@ class Journal:
     def replay(self) -> Iterator[tuple[RecordType, bytes, int]]:
         """Yield ``(record_type, payload, offset)`` for every record in order.
 
-        Stops at the first corrupted record (raises :class:`JournalCorruption`)
+        Stops at the first corrupted record (raises :class:`JournalCorruptionError`)
         unless the record sits exactly at the data-region end (which can
         happen for empty journals).
         """
@@ -107,31 +131,24 @@ class Journal:
         offset = start
         while offset < end:
             if offset + RECORD_HEADER_SIZE > end:
-                raise JournalCorruption(
-                    f"Truncated record header at offset {offset} (data end={end})"
-                )
+                raise JournalCorruptionError(f"Truncated record header at offset {offset} (data end={end})", offset)
             header = bytes(self.file.mmap[offset : offset + RECORD_HEADER_SIZE])
             rtype_int, flags, length, crc = struct.unpack(RECORD_HEADER_FMT, header)
             del flags
             payload_start = offset + RECORD_HEADER_SIZE
             payload_end = payload_start + length
             if payload_end > end:
-                raise JournalCorruption(
-                    f"Truncated record payload at offset {offset} "
-                    f"(length={length}, data end={end})"
+                raise JournalCorruptionError(
+                    f"Truncated record payload at offset {offset} (length={length}, data end={end})", offset
                 )
             payload = bytes(self.file.mmap[payload_start:payload_end])
             expected = zlib.crc32(header[:6] + payload) & 0xFFFFFFFF
             if expected != crc:
-                raise JournalCorruption(
-                    f"CRC mismatch at offset {offset}: got {crc}, expected {expected}"
-                )
+                raise JournalCorruptionError(f"CRC mismatch at offset {offset}: got {crc}, expected {expected}", offset)
             try:
                 rtype = RecordType(rtype_int)
             except ValueError as exc:
-                raise JournalCorruption(
-                    f"Unknown record type {rtype_int} at offset {offset}"
-                ) from exc
+                raise JournalCorruptionError(f"Unknown record type {rtype_int} at offset {offset}", offset) from exc
             yield rtype, payload, offset
             offset = payload_end
 
@@ -144,7 +161,7 @@ class Journal:
 
 __all__ = [
     "Journal",
-    "JournalCorruption",
+    "JournalCorruptionError",
     "RECORD_HEADER_SIZE",
     "RecordType",
 ]

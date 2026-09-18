@@ -1,12 +1,6 @@
 from __future__ import annotations
 
-import asyncio
-import os
-import shutil
-import tarfile
-import tempfile
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -14,7 +8,6 @@ from smp.core.models import (
     EdgeType,
     GraphEdge,
     GraphNode,
-    Language,
     NodeType,
     SemanticProperties,
     StructuralProperties,
@@ -68,7 +61,9 @@ class TestBackupRestoreIntegration:
         await backup(test_store, backup_path)
 
         assert backup_path.exists()
-        restored = MMapGraphStore(path=str(backup_path))
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=str(restored_path))
         await restored.connect()
         try:
             for node in nodes:
@@ -127,7 +122,9 @@ class TestBackupRestoreIntegration:
         backup_path = Path(str(test_store.path).replace(".smpg", "_full.smpg"))
         await backup(test_store, backup_path)
 
-        restored = MMapGraphStore(path=backup_path)
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=restored_path)
         await restored.connect()
         try:
             retrieved = await restored.get_node(node.id)
@@ -164,7 +161,9 @@ class TestBackupRestoreIntegration:
         backup_path = Path(str(test_store.path).replace(".smpg", "_edges.smpg"))
         await backup(test_store, backup_path)
 
-        restored = MMapGraphStore(path=backup_path)
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=restored_path)
         await restored.connect()
         try:
             edges_result = await restored.get_edges(node_a.id)
@@ -191,7 +190,9 @@ class TestBackupRestoreIntegration:
         backup_path = Path(str(test_store.path).replace(".smpg", "_large.smpg"))
         await backup(test_store, backup_path)
 
-        restored = MMapGraphStore(path=str(backup_path))
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=str(restored_path))
         await restored.connect()
         try:
             count = await restored.count_nodes()
@@ -224,6 +225,9 @@ class TestBackupRestoreIntegration:
         restored_path = tmp_path / "restored.smpg"
         await restore(restored_path, backup_path)
 
+        # Restoring over the live file must leave a timestamped sidecar.
+        await restore(original_path, backup_path)
+
         sidecars = list(tmp_path.glob("existing.smpg.bak.*"))
         assert len(sidecars) > 0
 
@@ -244,7 +248,9 @@ class TestBackupRestoreIntegration:
         backup_path = Path(backup_path)
         await backup(test_store, backup_path)
 
-        restored = MMapGraphStore(path=backup_path)
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=restored_path)
         await restored.connect()
         try:
             for cycle in range(3):
@@ -338,7 +344,7 @@ class TestBackupRestoreIntegration:
 
         await compact(test_store)
 
-        retrieved = (await test_store.get_edges(source_id))[0]
+        retrieved = (await test_store.get_edges(node_a.id))[0]
         assert retrieved is not None
 
     @pytest.mark.asyncio
@@ -356,7 +362,7 @@ class TestBackupRestoreIntegration:
         for node in nodes:
             await test_store.upsert_node(node)
 
-        edge = GraphEdge("roundtrip_edge",
+        edge = GraphEdge(
             source_id="roundtrip_0",
             target_id="roundtrip_1",
             type=EdgeType.CALLS,
@@ -380,7 +386,7 @@ class TestBackupRestoreIntegration:
             for i in range(15):
                 node = await restored.get_node(f"roundtrip_{i}")
                 assert node is not None
-            retrieved_edge = (await restored.get_edges(source_id=edge.source_id))[0]
+            retrieved_edge = (await restored.get_edges(edge.source_id))[0]
             assert retrieved_edge is not None
         finally:
             await restored.close()
@@ -401,7 +407,9 @@ class TestBackupRestoreIntegration:
         backup_path = Path(backup_path)
         await backup(test_store, backup_path)
 
-        restored = MMapGraphStore(path=backup_path)
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=restored_path)
         await restored.connect()
         try:
             for node in node_types:
@@ -429,7 +437,9 @@ class TestBackupRestoreIntegration:
         backup_path = Path(backup_path)
         await backup(test_store, backup_path)
 
-        restored = MMapGraphStore(path=backup_path)
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=restored_path)
         await restored.connect()
         try:
             retrieved = await restored.get_node("semantic_node")
@@ -460,7 +470,9 @@ class TestBackupRestoreIntegration:
         backup_path = Path(backup_path)
         await backup(test_store, backup_path)
 
-        restored = MMapGraphStore(path=backup_path)
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=restored_path)
         await restored.connect()
         try:
             retrieved = await restored.get_node("structural_node")
@@ -473,15 +485,24 @@ class TestBackupRestoreIntegration:
 
     @pytest.mark.asyncio
     async def test_backup_with_different_languages(self, test_store):
-        """Test backup preserves language metadata."""
+        """Test backup preserves per-file language context via file paths."""
         node_python = GraphNode(
-            id="py_node", type=NodeType.FUNCTION, file_path="p.py", language=Language.PYTHON
+            id="py_node",
+            type=NodeType.FUNCTION,
+            file_path="p.py",
+            structural=StructuralProperties(name="py_func", file="p.py"),
         )
         node_javascript = GraphNode(
-            id="js_node", type=NodeType.FUNCTION, file_path="j.js", language=Language.JAVASCRIPT
+            id="js_node",
+            type=NodeType.FUNCTION,
+            file_path="j.js",
+            structural=StructuralProperties(name="js_func", file="j.js"),
         )
         node_rust = GraphNode(
-            id="rs_node", type=NodeType.FUNCTION, file_path="r.rs", language=Language.RUST
+            id="rs_node",
+            type=NodeType.FUNCTION,
+            file_path="r.rs",
+            structural=StructuralProperties(name="rs_func", file="r.rs"),
         )
 
         await test_store.upsert_node(node_python)
@@ -492,15 +513,17 @@ class TestBackupRestoreIntegration:
         backup_path = Path(backup_path)
         await backup(test_store, backup_path)
 
-        restored = MMapGraphStore(path=backup_path)
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=restored_path)
         await restored.connect()
         try:
             py = await restored.get_node("py_node")
             js = await restored.get_node("js_node")
             rs = await restored.get_node("rs_node")
-            assert py.language == Language.PYTHON
-            assert js.language == Language.JAVASCRIPT
-            assert rs.language == Language.RUST
+            assert py is not None and py.file_path == "p.py"
+            assert js is not None and js.file_path == "j.js"
+            assert rs is not None and rs.file_path == "r.rs"
         finally:
             await restored.close()
 
@@ -524,7 +547,9 @@ class TestBackupRestoreIntegration:
         backup_path = Path(backup_path)
         await backup(test_store, backup_path)
 
-        restored = MMapGraphStore(path=backup_path)
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=restored_path)
         await restored.connect()
         try:
             assert await restored.get_node("del_0") is None
@@ -652,10 +677,12 @@ class TestBackupRestoreIntegration:
         backup_path = Path(str(test_store.path).replace(".smpg", "_edge_meta.smpg"))
         await backup(test_store, backup_path)
 
-        restored = MMapGraphStore(path=str(backup_path))
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=str(restored_path))
         await restored.connect()
         try:
-            retrieved_edges = await restored.get_edges(source_id="src")
+            retrieved_edges = await restored.get_edges("src")
             assert len(retrieved_edges) > 0
             retrieved = retrieved_edges[0]
             assert retrieved.metadata["weight"] == "1.5"
@@ -704,11 +731,13 @@ class TestBackupRestoreIntegration:
         backup_path = Path(str(test_store.path).replace(".smpg", "_traverse.smpg"))
         await backup(test_store, backup_path)
 
-        restored = MMapGraphStore(path=str(backup_path))
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=str(restored_path))
         await restored.connect()
         try:
             neighbors = await restored.traverse("traverse_a", relationship=EdgeType.CALLS)
-            assert "traverse_b" in neighbors
+            assert "traverse_b" in [n.id for n in neighbors]
         finally:
             await restored.close()
 
@@ -730,7 +759,9 @@ class TestBackupRestoreIntegration:
         backup_path = Path(str(test_store.path).replace(".smpg", "_query.smpg"))
         await backup(test_store, backup_path)
 
-        restored = MMapGraphStore(path=str(backup_path))
+        restored_path = backup_path.parent / (backup_path.stem + "_restored.smpg")
+        await restore(restored_path, backup_path)
+        restored = MMapGraphStore(path=str(restored_path))
         await restored.connect()
         try:
             results = await restored.find_nodes(name="query_name_0")

@@ -625,10 +625,10 @@ smp/
 |------|-------------|
 | 5.1 | Define `.smpv` format |
 | 5.2 | Implement vector index + storage |
-| 5.3 | Embedding generation service integration |
+| 5.3 | Bring-your-own-embeddings API (`upsert`/`query` take caller-supplied vectors; no built-in model) |
 | 5.4 | Similarity search |
 
-**Milestone**: Can store embeddings, query by similarity.
+**Milestone**: Can store caller-supplied embeddings, query by similarity.
 
 ### Phase 6: Live Updates (1 week)
 
@@ -640,7 +640,9 @@ smp/
 
 **Milestone**: Graph stays in sync with file system changes.
 
-### Phase 7: Integration & Polish (2 weeks)
+### Phase 7: Integration & Polish (2 weeks) — ✅ COMPLETED
+
+This migration is done: the server runs on the mmap store with no Neo4j dependency.
 
 | Task | Description |
 |------|-------------|
@@ -723,9 +725,9 @@ benchmarks/
 tree-sitter>=0.21.0
 tree-sitter-python>=0.21.0
 
-# Optional (for vector embeddings)
+# Vectors (bring-your-own-embeddings — no built-in embedding model)
 numpy>=1.24.0  # Vector storage
-sentence-transformers>=2.2.0  # Embedding generation
+faiss-cpu>=1.7  # Similarity index
 
 # File watching
 pyinotify>=0.9.6  # Linux inotify
@@ -767,4 +769,4 @@ All 14 languages listed below are fully supported through the `CodeParser` → `
 - **Remote graphs**: Graph file served over network
 - **Replication**: Primary + read replicas
 - **Full-text search**: Enhanced FTS in string pool
-- **Graph algorithms**: PageRank, connected components, cycle detection
+- **Graph algorithms**: Connected components (shipped, powers community detection); PageRank, cycle detection (future)

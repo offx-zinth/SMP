@@ -10,14 +10,17 @@ through a method->handler table.
 
 from __future__ import annotations
 
+import asyncio
+import signal
+import time
+import uuid
 from collections.abc import Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Any
 
-import time
-
-from fastapi import FastAPI, Request
+import structlog
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from smp.core.config import Settings
@@ -63,7 +66,11 @@ from smp.protocol.handlers import (
 from smp.protocol.handlers import (
     sync as sync_handlers,
 )
+from smp.protocol.handlers import (
+    vector as vector_handlers,
+)
 from smp.store.graph.mmap_store import MMapGraphStore
+from smp.vector.mmap_vector import MMapVectorStore
 
 log = get_logger(__name__)
 
@@ -146,6 +153,9 @@ _HANDLERS: dict[str, HandlerFn] = {
     "smp/index/import": sync_handlers.index_import,
     "smp/integrity/check": sync_handlers.integrity_check,
     "smp/integrity/baseline": sync_handlers.integrity_baseline,
+    "smp/vector/search": vector_handlers.vector_search,
+    "smp/vector/upsert": vector_handlers.vector_upsert,
+    "smp/vector/delete": vector_handlers.vector_delete,
 }
 
 
@@ -165,8 +175,101 @@ async def _dispatch(method: str, params: dict[str, Any], ctx: dict[str, Any]) ->
     return await handler(params, ctx)
 
 
+def setup_graceful_shutdown(server: Any, app: FastAPI) -> None:
+    """Setup SIGTERM handler for graceful shutdown.
+
+    On SIGTERM:
+    1. Stops accepting new requests
+    2. Waits for in-flight requests to complete (30s timeout)
+    3. Flushes all buffers (journal fsync)
+    4. Closes connections cleanly
+
+    Parameters
+    ----------
+    server
+        The uvicorn.Server instance to signal shutdown
+    app
+        The FastAPI application instance
+    """
+
+    _shutdown_event = asyncio.Event()
+
+    def _in_flight_count() -> int:
+        return int(getattr(app, "state", None) and getattr(app.state, "active_request_count", 0) or 0)
+
+    async def shutdown_handler(signum: int, frame: Any) -> None:
+        """SIGTERM signal handler for graceful shutdown."""
+        log.info("sigterm_received", signal=signum)
+
+        # Phase 1: Stop accepting new requests
+        log.info("shutdown_phase_1_stop_accepting_requests")
+        server.should_exit = True
+
+        # Phase 2: Wait for in-flight requests (max 30s)
+        log.info("shutdown_phase_2_wait_in_flight_requests")
+        timeout = 30.0
+        start = time.time()
+        while _in_flight_count() > 0 and (time.time() - start) < timeout:
+            await asyncio.sleep(0.5)
+            if _in_flight_count() > 0:
+                log.info(
+                    "waiting_for_requests",
+                    in_flight=_in_flight_count(),
+                    elapsed_s=round(time.time() - start, 1),
+                )
+
+        if _in_flight_count() > 0:
+            log.warning(
+                "shutdown_timeout_requests_still_in_flight",
+                count=_in_flight_count(),
+            )
+
+        # Phase 3: Flush all buffers
+        log.info("shutdown_phase_3_flush_buffers")
+        try:
+            graph: MMapGraphStore | None = getattr(app.state, "graph", None)
+            if graph is not None:
+                await graph.flush()
+                log.info("shutdown_graph_store_flushed")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("shutdown_graph_store_flush_failed", error=str(exc))
+
+        # Phase 4: Close connections
+        log.info("shutdown_phase_4_close_connections")
+        try:
+            graph_store: MMapGraphStore | None = getattr(app.state, "graph", None)
+            vector_store: MMapVectorStore | None = getattr(app.state, "vector_store", None)
+
+            if graph_store is not None:
+                await graph_store.close()
+                log.info("shutdown_graph_store_closed")
+
+            if vector_store is not None:
+                await vector_store.close()
+                log.info("shutdown_vector_store_closed")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("shutdown_store_close_failed", error=str(exc))
+
+        log.info("shutdown_complete")
+        _shutdown_event.set()
+
+    def signal_handler(signum: int, frame: Any) -> None:
+        """Wrapper to schedule async shutdown handler."""
+        with suppress(RuntimeError):
+            # RuntimeError raised if no event loop is running yet
+            asyncio.create_task(shutdown_handler(signum, frame))
+
+    # Install SIGTERM handler
+    try:
+        signal.signal(signal.SIGTERM, signal_handler)
+        log.info("graceful_shutdown_handler_installed")
+    except Exception as exc:  # noqa: BLE001
+        log.warning("graceful_shutdown_handler_install_failed", error=str(exc))
+
+
 def create_app(
     graph_path: str | None = None,
+    vector_path: str | None = None,
     safety_enabled: bool = False,  # accepted for backward CLI compat; unused
     auth_policy: AuthPolicy | None = None,
 ) -> FastAPI:
@@ -176,6 +279,8 @@ def create_app(
     ----------
     graph_path
         Override location of the ``.smpg`` file (defaults to ``Settings``).
+    vector_path
+        Override location of the ``.smpv`` file (defaults to ``Settings``).
     auth_policy
         Optional pre-built :class:`AuthPolicy`.  If omitted the policy is
         loaded from environment variables on each call (so tests can pin
@@ -184,7 +289,7 @@ def create_app(
     del safety_enabled
     settings = Settings.from_env()
     resolved_graph_path = graph_path or settings.graph_path
-    Path(resolved_graph_path).parent.mkdir(parents=True, exist_ok=True)
+    resolved_vector_path = vector_path or settings.vector_path
 
     policy = auth_policy or AuthPolicy.from_env()
     limiter = RateLimiter(policy.rate_limit_per_minute)
@@ -193,13 +298,19 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):  # type: ignore[no-untyped-def]  # noqa: ANN202
+        Path(resolved_graph_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(resolved_vector_path).parent.mkdir(parents=True, exist_ok=True)
         graph = MMapGraphStore(path=resolved_graph_path)
         await graph.connect()
+
+        vector_store = MMapVectorStore(path=resolved_vector_path, dimension=128)
+        await vector_store.connect()
 
         engine = DefaultQueryEngine(graph_store=graph)
         builder = DefaultGraphBuilder(graph)
 
         app.state.graph = graph
+        app.state.vector_store = vector_store
         app.state.engine = engine
         app.state.builder = builder
         app.state.auth_policy = policy
@@ -209,6 +320,7 @@ def create_app(
             "engine": engine,
             "builder": builder,
             "graph": graph,
+            "vector_store": vector_store,
             "metrics": metrics,
         }
 
@@ -222,6 +334,7 @@ def create_app(
             yield
         finally:
             await graph.close()
+            await vector_store.close()
             log.info("server_stopped")
 
     app = FastAPI(
@@ -230,14 +343,28 @@ def create_app(
         lifespan=lifespan,
     )
 
+    @app.middleware("http")
+    async def correlation_id_middleware(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        correlation_id = request.headers.get("X-Correlation-ID", str(uuid.uuid4()))
+        request.state.correlation_id = correlation_id
+        structlog.contextvars.bind_contextvars(correlation_id=correlation_id)
+        app.state.active_request_count = getattr(app.state, "active_request_count", 0) + 1
+        try:
+            response = await call_next(request)
+            response.headers["X-Correlation-ID"] = correlation_id
+            return response
+        finally:
+            app.state.active_request_count = max(0, getattr(app.state, "active_request_count", 1) - 1)
+            structlog.contextvars.clear_contextvars()
+
     async def _authenticate(request: Request) -> Any:
         """Return a :class:`Principal` or a JSON ``401`` response."""
         token = extract_token(request.headers)
         principal = policy.authenticate(token)
         if principal is None:
-            return JSONResponse(
-                rpc_error(-32001, "Unauthorized"), status_code=401
-            )
+            return JSONResponse(rpc_error(-32001, "Unauthorized"), status_code=401)
         return principal
 
     @app.post("/rpc")
@@ -253,17 +380,13 @@ def create_app(
         if cl_header:
             try:
                 if int(cl_header) > max_bytes:
-                    return JSONResponse(
-                        rpc_error(-32600, "Request body too large"), status_code=413
-                    )
+                    return JSONResponse(rpc_error(-32600, "Request body too large"), status_code=413)
             except ValueError:
                 pass
 
         body = await request.body()
         if len(body) > max_bytes:
-            return JSONResponse(
-                rpc_error(-32600, "Request body too large"), status_code=413
-            )
+            return JSONResponse(rpc_error(-32600, "Request body too large"), status_code=413)
 
         try:
             payload = msgspec_json_decode(body)
@@ -282,9 +405,7 @@ def create_app(
             params = {}
 
         if not principal.has(required_scope(method)):
-            return JSONResponse(
-                rpc_error(-32002, "Forbidden", request_id), status_code=403
-            )
+            return JSONResponse(rpc_error(-32002, "Forbidden", request_id), status_code=403)
 
         if not limiter.allow(principal):
             return JSONResponse(
@@ -292,8 +413,15 @@ def create_app(
                 status_code=429,
             )
 
-        ctx: dict[str, Any] = dict(app.state.runtime_ctx)
+        try:
+            runtime_ctx = app.state.runtime_ctx
+        except (AttributeError, KeyError):
+            log.warning("rpc_server_not_ready", method=method)
+            return JSONResponse(rpc_error(-32603, "Server not ready", request_id), status_code=503)
+
+        ctx: dict[str, Any] = dict(runtime_ctx)
         ctx["principal"] = principal
+        ctx["correlation_id"] = request.state.correlation_id
 
         start = time.perf_counter()
         status = "ok"
@@ -346,6 +474,102 @@ def create_app(
             return JSONResponse({"status": "unavailable"}, status_code=503)
         return {"status": "ready"}
 
+    @app.get("/health/detailed")
+    async def health_detailed() -> Any:
+        """Detailed health check with dependency status and latencies.
+
+        Returns a comprehensive health report including:
+        - Overall status (healthy, degraded, unhealthy)
+        - Per-component status and latency
+        - Journal metadata
+        - Recommendations for remediation
+        """
+        import time
+
+        graph: MMapGraphStore = app.state.graph
+        vector_store: MMapVectorStore = app.state.vector_store
+        checks: dict[str, dict[str, Any]] = {}
+        overall_status = "healthy"
+
+        # 1. Graph store accessibility
+        try:
+            start = time.perf_counter()
+            count = await graph.count_nodes()
+            latency_ms = (time.perf_counter() - start) * 1000
+            checks["graph_store"] = {
+                "status": "accessible",
+                "latency_ms": round(latency_ms, 2),
+                "nodes": count,
+            }
+        except Exception as exc:  # noqa: BLE001
+            checks["graph_store"] = {
+                "status": "inaccessible",
+                "error": str(exc)[:100],
+            }
+            overall_status = "unhealthy"
+            log.exception("health_check_graph_store_failed")
+
+        # 2. Vector store accessibility
+        try:
+            start = time.perf_counter()
+            count = len(vector_store)
+            latency_ms = (time.perf_counter() - start) * 1000
+            checks["vector_store"] = {
+                "status": "accessible",
+                "latency_ms": round(latency_ms, 2),
+                "embeddings": count,
+            }
+        except Exception as exc:  # noqa: BLE001
+            checks["vector_store"] = {
+                "status": "degraded",
+                "error": str(exc)[:100],
+            }
+            if overall_status == "healthy":
+                overall_status = "degraded"
+            log.exception("health_check_vector_store_failed")
+
+        # 3. Journal health
+        try:
+            journal_checks = {
+                "status": "healthy",
+                "file_size_bytes": graph.file.size,
+                "data_end_bytes": graph.file.data_region_end,
+                "sessions_active": len(graph._sessions),  # noqa: SLF001
+                "locks_active": len(graph._locks),  # noqa: SLF001
+                "audit_entries": len(graph._audit),  # noqa: SLF001
+            }
+            checks["journal"] = journal_checks
+        except Exception as exc:  # noqa: BLE001
+            checks["journal"] = {
+                "status": "degraded",
+                "error": str(exc)[:100],
+            }
+            if overall_status == "healthy":
+                overall_status = "degraded"
+            log.exception("health_check_journal_failed")
+
+        # 4. Redis accessibility (if configured) - optional, skipped if not configured
+        try:
+            from smp.core.config import Settings
+
+            settings = Settings.from_env()
+            redis_url = getattr(settings, "redis_url", None)
+            if redis_url:
+                # Redis is configured but optional, mark as degraded if unavailable
+                checks["redis"] = {
+                    "status": "not_tested",
+                    "note": "Redis checks skipped (optional service)",
+                }
+        except Exception:  # noqa: BLE001
+            # Silently skip Redis check if it can't be configured
+            pass
+
+        return {
+            "status": overall_status,
+            "timestamp": time.time(),
+            "checks": checks,
+        }
+
     @app.get("/stats")
     async def stats(request: Request) -> Any:
         principal_or_resp = await _authenticate(request)
@@ -367,10 +591,7 @@ def create_app(
             return principal_or_resp
         return {
             "count": len(_HANDLERS),
-            "methods": [
-                {"method": m, "scope": str(required_scope(m))}
-                for m in sorted(_HANDLERS.keys())
-            ],
+            "methods": [{"method": m, "scope": str(required_scope(m))} for m in sorted(_HANDLERS.keys())],
         }
 
     @app.get("/metrics")

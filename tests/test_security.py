@@ -22,15 +22,9 @@ from smp.protocol.server import create_app
 def _policy(**overrides: Any) -> AuthPolicy:
     """Build a strict (non-open-mode) policy with named principals."""
     keys = {
-        "key-admin": Principal(
-            key_id="admin", name="admin", scopes=frozenset({Scope.READ, Scope.WRITE, Scope.ADMIN})
-        ),
-        "key-writer": Principal(
-            key_id="writer", name="writer", scopes=frozenset({Scope.READ, Scope.WRITE})
-        ),
-        "key-reader": Principal(
-            key_id="reader", name="reader", scopes=frozenset({Scope.READ})
-        ),
+        "key-admin": Principal(key_id="admin", name="admin", scopes=frozenset({Scope.READ, Scope.WRITE, Scope.ADMIN})),
+        "key-writer": Principal(key_id="writer", name="writer", scopes=frozenset({Scope.READ, Scope.WRITE})),
+        "key-reader": Principal(key_id="reader", name="reader", scopes=frozenset({Scope.READ})),
     }
     policy = AuthPolicy(keys=keys, open_mode=False)
     for k, v in overrides.items():
@@ -209,9 +203,7 @@ class TestRequestHardening:
         assert response.status_code == 200
         assert response.json()["error"]["code"] == -32600
 
-    def test_internal_error_is_redacted(
-        self, secure_client: TestClient, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_internal_error_is_redacted(self, secure_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
         from smp.protocol import server as server_module
 
         async def bomb(*_: Any, **__: Any) -> None:
@@ -299,16 +291,14 @@ class TestScopePolicy:
 
 
 class TestAuthPolicyFromEnv:
-    def test_missing_keys_file_falls_back_to_open_mode(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_missing_keys_file_falls_back_to_closed_mode(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("SMP_API_KEYS_FILE", str(tmp_path / "missing.json"))
+        monkeypatch.setenv("SMP_OPEN_MODE", "0")
         policy = AuthPolicy.from_env()
-        assert policy.open_mode is True
+        # Security hardening: open mode is disabled by default
+        assert policy.open_mode is False
 
-    def test_well_formed_keys_file_loads(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_well_formed_keys_file_loads(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         keys_file = tmp_path / "keys.json"
         keys_file.write_text(
             json.dumps(
@@ -321,6 +311,7 @@ class TestAuthPolicyFromEnv:
             )
         )
         monkeypatch.setenv("SMP_API_KEYS_FILE", str(keys_file))
+        monkeypatch.setenv("SMP_OPEN_MODE", "0")
         policy = AuthPolicy.from_env()
         assert policy.open_mode is False
         assert len(policy.keys) == 2
