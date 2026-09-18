@@ -29,7 +29,12 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+try:
+    from mcp.server.fastmcp import FastMCP
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "mcp.server.fastmcp module is required for SMP MCP server. Please install mcp<2 or mcp[cli]."
+    ) from exc
 
 from smp.core.config import Settings
 from smp.engine.graph_builder import DefaultGraphBuilder

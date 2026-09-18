@@ -8,6 +8,10 @@ from typing import Any, Final
 
 try:
     import tree_sitter_languages  # type: ignore[import-untyped]
+except ImportError:
+    tree_sitter_languages = None  # type: ignore
+
+try:
     from tree_sitter import Language, Parser
 
     HAS_TREE_SITTER = True
@@ -324,18 +328,19 @@ class CodeParser:
             return
 
         loaded = False
-        try:
-            ts_lang = tree_sitter_languages.get_language("python")
-            parser = Parser()
-            if hasattr(parser, "language"):
-                parser.language = ts_lang
-            else:
-                parser.set_language(ts_lang)  # type: ignore[attr-defined]
-            self._languages[LANG_PYTHON] = ts_lang
-            self._parsers[LANG_PYTHON] = parser
-            loaded = True
-        except Exception:  # noqa: BLE001
-            pass
+        if tree_sitter_languages is not None:
+            try:
+                ts_lang = tree_sitter_languages.get_language("python")
+                parser = Parser()
+                if hasattr(parser, "language"):
+                    parser.language = ts_lang
+                else:
+                    parser.set_language(ts_lang)  # type: ignore[attr-defined]
+                self._languages[LANG_PYTHON] = ts_lang
+                self._parsers[LANG_PYTHON] = parser
+                loaded = True
+            except Exception:  # noqa: BLE001
+                pass
 
         if not loaded:
             try:
