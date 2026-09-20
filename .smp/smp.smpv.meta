@@ -1,1 +1,1 @@
-{"version": 1, "dim": 128, "ids": [], "metadata": [], "documents": [], "tombstones": []}
+{"version": 1, "dim": 128, "ids": ["v1"], "metadata": [{"src": "test"}], "documents": [""], "tombstones": [false]}

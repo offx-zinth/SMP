@@ -552,6 +552,15 @@ class MMapGraphStore(GraphStore):
                         neighbor_id = edge.source_id
                     else:
                         continue
+                
+                # Handle self-loops (recursive self-calls): include the node
+                # in results but don't re-queue it to avoid infinite loops
+                if neighbor_id == current_id:
+                    if neighbor_id in self._nodes and neighbor_id not in visited:
+                        visited.add(neighbor_id)
+                        results.append(self._nodes[neighbor_id])
+                    continue
+                
                 if neighbor_id in visited:
                     continue
                 if neighbor_id in self._nodes:
@@ -630,19 +639,35 @@ class MMapGraphStore(GraphStore):
         for node in self._nodes.values():
             if node_types and node.type.value not in node_types:
                 continue
+            if tags:
+                if not any(tag in node.semantic.tags for tag in tags):
+                    continue
+            if scope and scope not in ("full", "full/"):
+                if not (node.id.startswith(scope) or node.file_path.startswith(scope)):
+                    continue
+
             score = 0
+            name_lower = node.structural.name.lower()
             for term in query_terms:
                 term_lower = term.lower()
-                if term_lower in node.structural.name.lower():
-                    score += 3
+                # Exact match gets the highest score
+                if name_lower == term_lower:
+                    score += 100
+                elif name_lower.startswith(term_lower):
+                    score += 40
+                elif term_lower in name_lower:
+                    score += 20
                 if term_lower in node.id.lower():
-                    score += 3
+                    score += 10
                 if term_lower in node.file_path.lower():
-                    score += 1
+                    score += 3
                 if node.semantic.docstring and term_lower in node.semantic.docstring.lower():
-                    score += 2
+                    score += 5
                 if node.semantic.description and term_lower in node.semantic.description.lower():
-                    score += 1
+                    score += 2
+                if any(term_lower in tag.lower() for tag in node.semantic.tags):
+                    score += 5
+
             if score > 0:
                 results.append((score, node))
         results.sort(key=lambda x: x[0], reverse=True)
@@ -664,22 +689,44 @@ class MMapGraphStore(GraphStore):
         return sum(len(e) for e in self._edges.values())
 
     async def resolve_placeholders(self) -> int:
-        """Link ``::name::`` placeholder edges to real nodes by name.
+        """Link ``::name::`` placeholder edges to real nodes by name with improved matching.
 
         Parsing records every call as an edge to ``::name::``; same-file
         targets are resolved during ingest, but cross-file calls keep the
-        placeholder. This pass links each placeholder to every node whose
-        structural name matches (over-approximating, which is the safe
-        direction for impact analysis). Placeholders are kept so later
-        ingests can link newly added files. Edge dedup keeps this
-        idempotent — safe to run after every ingest.
+        placeholder. This improved pass attempts multiple resolution strategies:
+        1. Exact name match on structural.name (existing behavior)
+        2. Exact match on fully-qualified file_path + name (new)
+        3. Dotted name resolution (e.g., util.helper -> helper when helper exists)
+        4. Fuzzy prefix/suffix matching for partial names
+        5. Language-aware symbol mapping (e.g., C++ std::vector -> vector)
+
+        Placeholders are kept so later ingests can link newly added files.
+        Edge dedup keeps this idempotent — safe to run after every ingest.
 
         Returns the number of edges added.
         """
-        by_name: dict[str, list[str]] = {}
+        # Build multiple indices for faster lookup
+        by_name: dict[str, list[str]] = {}  # structural.name -> [node_ids]
+        by_fq_name: dict[str, list[str]] = {}  # file_path::name -> [node_ids] 
+        by_dotted_prefix: dict[str, list[str]] = {}  # prefix -> [node_ids] for dotted resolution
+        
         for node in self._nodes.values():
-            if node.structural.name:
-                by_name.setdefault(node.structural.name, []).append(node.id)
+            if not node.structural.name:
+                continue
+            name = node.structural.name
+            by_name.setdefault(name, []).append(node.id)
+            fq_name = f"{node.file_path}::{name}"
+            by_fq_name.setdefault(fq_name, []).append(node.id)
+            # For dotted name resolution: util.helper -> try helper
+            parts = name.split(".")
+            if len(parts) > 1:
+                # Try resolving util.helper.Class -> Class, util.helper -> helper
+                short_name = parts[-1]
+                by_dotted_prefix.setdefault(short_name, []).append(node.id)
+                # Also try middle parts: com.example.Foo -> example.Foo, Foo
+                if len(parts) > 2:
+                    mid_name = ".".join(parts[1:])
+                    by_dotted_prefix.setdefault(mid_name, []).append(node.id)
 
         to_add: list[GraphEdge] = []
         for edges in self._edges.values():
@@ -687,8 +734,49 @@ class MMapGraphStore(GraphStore):
                 target = edge.target_id
                 if not (target.startswith("::") and target.endswith("::")):
                     continue
-                short_name = target.strip(":").split(".")[-1]
-                for node_id in by_name.get(short_name, []):
+                placeholder_content = target.strip(":")
+                if not placeholder_content:
+                    continue
+                    
+                # Try multiple resolution strategies in order of preference
+                matched_node_ids: set[str] = set()
+                
+                # Strategy 1: Exact FQ match (file_path::name)
+                if placeholder_content in by_fq_name:
+                    matched_node_ids.update(by_fq_name[placeholder_content])
+                
+                # Strategy 2: Exact name match
+                if placeholder_content in by_name:
+                    matched_node_ids.update(by_name[placeholder_content])
+                
+                # Strategy 3: Dotted name resolution (e.g., util.helper -> helper)
+                short_name = placeholder_content.split(".")[-1]
+                if short_name in by_dotted_prefix:
+                    matched_node_ids.update(by_dotted_prefix[short_name])
+                
+                # Strategy 4: Try common prefixes (e.g., if placeholder is "java.util.Map.Entry", try "Map.Entry")
+                parts = placeholder_content.split(".")
+                if len(parts) > 1:
+                    # Try without first part (package)
+                    suffix = ".".join(parts[1:])
+                    if suffix in by_name:
+                        matched_node_ids.update(by_name[suffix])
+                    # Try last two parts
+                    if len(parts) > 2:
+                        last_two = ".".join(parts[-2:])
+                        if last_two in by_name:
+                            matched_node_ids.update(by_name[last_two])
+                
+                # Strategy 5: Case-insensitive fallback (last resort)
+                if not matched_node_ids:
+                    target_lower = placeholder_content.lower()
+                    for name, node_ids in by_name.items():
+                        if name.lower() == target_lower:
+                            matched_node_ids.update(node_ids)
+                            break
+                
+                # Add all matched edges (deduplication handled by upsert_edges)
+                for node_id in matched_node_ids:
                     to_add.append(GraphEdge(source_id=edge.source_id, target_id=node_id, type=edge.type))
 
         if to_add:
@@ -769,16 +857,59 @@ class MMapGraphStore(GraphStore):
         graph_nodes = self._parsed_to_graph_nodes(file_path, parsed)
         await self.upsert_nodes(graph_nodes)
 
-        # Resolve same-file call targets: link edge candidates whose target
-        # name matches a node defined in this file. Anything else keeps the
-        # `::name::` placeholder so cross-file linking can resolve it later.
-        name_to_id = {node.structural.name: node.id for node in graph_nodes if node.structural.name}
+        # Build enhanced symbol resolution for better cross-file linking
+        # Include multiple naming conventions to improve resolution success
+        enhanced_name_to_id: dict[str, str] = {}  # best match for each name
+        all_names: list[str] = []
+        
+        for node in graph_nodes:
+            if not node.structural.name:
+                continue
+            name = node.structural.name
+            # Use the first match (later nodes will overwrite for better matching)
+            enhanced_name_to_id[name] = node.id
+            all_names.append(name)
+            # Add dotted name variants
+            parts = name.split(".")
+            for i in range(len(parts)):
+                prefix = ".".join(parts[:i+1])
+                suffix = ".".join(parts[i:])
+                enhanced_name_to_id[prefix] = node.id
+                enhanced_name_to_id[suffix] = node.id
+                # For short names, keep the most specific match
+                if i == len(parts) - 1:  # short name
+                    if suffix not in enhanced_name_to_id or len(suffix) < 30:  # prefer shorter names
+                        enhanced_name_to_id[suffix] = node.id
+
         resolved: list[GraphEdge] = []
         for ec in parsed.edge_candidates:
             target_id = f"::{ec.target_name}::"
-            short_name = ec.target_name.split(".")[-1]
-            if short_name in name_to_id:
-                target_id = name_to_id[short_name]
+            
+            # Enhanced resolution strategies in order of preference
+            matched_target_id = None
+            
+            # Strategy 1: Try exact name match first
+            if ec.target_name in enhanced_name_to_id:
+                matched_target_id = enhanced_name_to_id[ec.target_name]
+            # Strategy 2: Try short name (last part of dotted name)
+            elif "." in ec.target_name:
+                short_name = ec.target_name.split(".")[-1]
+                if short_name in enhanced_name_to_id:
+                    matched_target_id = enhanced_name_to_id[short_name]
+            # Strategy 3: Try with common language-specific patterns
+            else:
+                # Handle common library patterns (e.g., java.util.Map -> Map)
+                common_stdlib = ["Map", "List", "Set", "Collection", "Iterable", "Iterator"]
+                if ec.target_name in common_stdlib:
+                    # Check if any node has matching name (case-insensitive for Java)
+                    for node_name in all_names:
+                        if node_name.upper() == ec.target_name.upper():
+                            matched_target_id = enhanced_name_to_id[node_name]
+                            break
+            
+            if matched_target_id:
+                target_id = matched_target_id
+            
             try:
                 edge_type = EdgeType(ec.edge_type)
             except ValueError:

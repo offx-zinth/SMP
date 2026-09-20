@@ -57,10 +57,17 @@ class DefaultQueryEngine:
         # If exact match fails, try to find by file path or name
         if not node:
             # Check if query looks like a file path
+            import os
             if "/" in query or query.endswith(".py"):
                 candidates = await self._graph.find_nodes(file_path=query)
                 if candidates:
                     node = candidates[0]
+                else:
+                    abs_path = os.path.abspath(query)
+                    if abs_path != query:
+                        candidates = await self._graph.find_nodes(file_path=abs_path)
+                        if candidates:
+                            node = candidates[0]
             else:
                 # Try finding by name
                 candidates = await self._graph.find_nodes(name=query)
@@ -116,16 +123,41 @@ class DefaultQueryEngine:
         return [self._node_to_dict(n) for n in nodes]
 
     async def _resolve_node_id(self, query: str) -> str | None:
-        """Resolve a node id, exact file path, structural name, or id fragment to a node id."""
+        """Resolve a node id, exact file path, structural name, or id fragment to a node id.
+        
+        Improved resolution strategy:
+        1. Exact match by full node ID
+        2. Exact match by name with preference for most connected node
+        3. Deterministic file path ordering as tiebreaker
+        4. File path match
+        5. Partial ID match
+        """
         if await self._graph.get_node(query) is not None:
             return query
+        
+        # Find all nodes with matching name
         candidates = await self._graph.find_nodes(name=query)
         if candidates:
+            # If multiple candidates, prefer the one with most connections (edges),
+            # then use deterministic file path ordering as tiebreaker
+            if len(candidates) > 1:
+                best_candidate = None
+                best_count = -1
+                for candidate in sorted(candidates, key=lambda n: n.file_path):
+                    outgoing = await self._graph.get_edges(candidate.id, direction="outgoing")
+                    incoming = await self._graph.get_edges(candidate.id, direction="incoming")
+                    count = len(outgoing) + len(incoming)
+                    if count > best_count:
+                        best_count = count
+                        best_candidate = candidate
+                return best_candidate.id
             return candidates[0].id
+        
         if "/" in query:
             candidates = await self._graph.find_nodes(file_path=query)
             if candidates:
                 return candidates[0].id
+        
         for node in await self._graph.find_nodes():
             if node.id.startswith(query) or query in node.id:
                 return node.id
@@ -137,7 +169,18 @@ class DefaultQueryEngine:
         scope: str = "edit",
         depth: int = 2,
     ) -> dict[str, Any]:
+        # Normalize file path for matching - try both as-is and with cwd prefix
+        import os
         file_nodes = await self._graph.find_nodes(file_path=file_path)
+        if not file_nodes:
+            # Try absolute path
+            abs_path = os.path.abspath(file_path)
+            if abs_path != file_path:
+                file_nodes = await self._graph.find_nodes(file_path=abs_path)
+        if not file_nodes:
+            # Try substring match
+            all_nodes = await self._graph.find_nodes()
+            file_nodes = [n for n in all_nodes if file_path in n.file_path or os.path.basename(file_path) in n.file_path]
         if not file_nodes:
             return {"error": f"No nodes found for {file_path}"}
 
@@ -410,6 +453,7 @@ class DefaultQueryEngine:
             fields = ["name", "docstring", "tags"]
 
         terms = query.lower().split()
+        query_str = query.lower()
         all_nodes = await self._graph.find_nodes()
 
         scored: list[tuple[int, dict[str, Any]]] = []
@@ -421,22 +465,39 @@ class DefaultQueryEngine:
             matched_on = ""
 
             name_lower = node.structural.name.lower()
-            if all(t in name_lower for t in terms):
-                score = 100
+            # Exact match: query is the full name
+            if name_lower == query_str:
+                score = 1000
+                matched_on = "name (exact)"
+            # All terms in name (order-sensitive substring)
+            elif all(t in name_lower for t in terms):
+                score = 200
+                # Bonus for name starting with query
+                if name_lower.startswith(terms[0] if terms else ""):
+                    score += 50
                 matched_on = "name"
+            # Any term in name (partial)
             elif any(t in name_lower for t in terms):
-                score = 50
+                score = 80
                 matched_on = "name"
             elif node.semantic.docstring:
                 doc_lower = node.semantic.docstring.lower()
                 if all(t in doc_lower for t in terms):
-                    score = 30
+                    score = 60
                     matched_on = "docstring"
                 elif any(t in doc_lower for t in terms):
-                    score = 15
+                    score = 25
                     matched_on = "docstring"
+            elif node.semantic.description:
+                desc_lower = node.semantic.description.lower()
+                if all(t in desc_lower for t in terms):
+                    score = 40
+                    matched_on = "description"
+                elif any(t in desc_lower for t in terms):
+                    score = 12
+                    matched_on = "description"
 
-            # Check tags even if no name/docstring match
+            # Check tags even if no other match
             for tag in node.semantic.tags:
                 if any(t in tag.lower() for t in terms):
                     score += 10
