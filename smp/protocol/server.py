@@ -24,6 +24,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from smp.core.config import Settings
+from smp.embedding.service import EMBEDDING_DIM, QwenEmbeddingService, get_embedding_service
 from smp.engine.graph_builder import DefaultGraphBuilder
 from smp.engine.query import DefaultQueryEngine
 from smp.logging import get_logger
@@ -69,6 +70,7 @@ from smp.protocol.handlers import (
 from smp.protocol.handlers import (
     vector as vector_handlers,
 )
+from smp.runtime.sandbox import SandboxRuntime
 from smp.store.graph.mmap_store import MMapGraphStore
 from smp.vector.mmap_vector import MMapVectorStore
 
@@ -102,6 +104,7 @@ _HANDLERS: dict[str, HandlerFn] = {
     "smp/impact": query_handlers.impact,
     "smp/locate": query_handlers.locate,
     "smp/search": query_handlers.search,
+    "smp/semantic_search": query_handlers.semantic_search,
     "smp/flow": query_handlers.flow,
     # Memory management
     "smp/update": memory_handlers.update,
@@ -156,6 +159,7 @@ _HANDLERS: dict[str, HandlerFn] = {
     "smp/vector/search": vector_handlers.vector_search,
     "smp/vector/upsert": vector_handlers.vector_upsert,
     "smp/vector/delete": vector_handlers.vector_delete,
+    "smp/vector/semantic_search": vector_handlers.vector_semantic_search,
 }
 
 
@@ -239,6 +243,7 @@ def setup_graceful_shutdown(server: Any, app: FastAPI) -> None:
         try:
             graph_store: MMapGraphStore | None = getattr(app.state, "graph", None)
             vector_store: MMapVectorStore | None = getattr(app.state, "vector_store", None)
+            embedding_service: QwenEmbeddingService | None = getattr(app.state, "embedding_service", None)
 
             if graph_store is not None:
                 await graph_store.close()
@@ -247,6 +252,10 @@ def setup_graceful_shutdown(server: Any, app: FastAPI) -> None:
             if vector_store is not None:
                 await vector_store.close()
                 log.info("shutdown_vector_store_closed")
+
+            if embedding_service is not None:
+                await embedding_service.close()
+                log.info("shutdown_embedding_service_closed")
         except Exception as exc:  # noqa: BLE001
             log.exception("shutdown_store_close_failed", error=str(exc))
 
@@ -303,14 +312,18 @@ def create_app(
         graph = MMapGraphStore(path=resolved_graph_path)
         await graph.connect()
 
-        vector_store = MMapVectorStore(path=resolved_vector_path, dimension=128)
+        vector_store = MMapVectorStore(path=resolved_vector_path, dimension=EMBEDDING_DIM)
         await vector_store.connect()
 
-        engine = DefaultQueryEngine(graph_store=graph)
+        embedding_service = await get_embedding_service()
+        vector_store.set_embedding_service(embedding_service)
+
+        engine = DefaultQueryEngine(graph_store=graph, vector_store=vector_store)
         builder = DefaultGraphBuilder(graph)
 
         app.state.graph = graph
         app.state.vector_store = vector_store
+        app.state.embedding_service = embedding_service
         app.state.engine = engine
         app.state.builder = builder
         app.state.auth_policy = policy
@@ -321,7 +334,20 @@ def create_app(
             "builder": builder,
             "graph": graph,
             "vector_store": vector_store,
+            "embedding_service": embedding_service,
             "metrics": metrics,
+            # Shared per-process runtime state. The ``/rpc`` endpoint
+            # shallow-copies this dict per request, so anything handlers
+            # stash via ``ctx.setdefault`` (reviews, sandboxes, community
+            # cache, sessions, locks, audit log) must be pre-seeded here —
+            # otherwise it is lost after each response.
+            "_sessions": {},
+            "_locks": {},
+            "_audit_log": [],
+            "_reviews": {},
+            "_pull_requests": {},
+            "_sandbox_runtime": SandboxRuntime(),
+            "_communities": {"by_id": {}, "node_to_id": {}, "level": 0},
         }
 
         log.info(
@@ -335,6 +361,9 @@ def create_app(
         finally:
             await graph.close()
             await vector_store.close()
+            embedding_service_obj = getattr(app.state, "embedding_service", None)
+            if embedding_service_obj is not None:
+                await embedding_service_obj.close()
             log.info("server_stopped")
 
     app = FastAPI(

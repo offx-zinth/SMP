@@ -1,0 +1,41 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@ --with python3 --buildsystem=pybuild
+
+override_dh_auto_build:
+	# Build the Python wheel
+	python3 -m pip wheel . --no-deps -w dist/
+	dh_auto_build
+
+override_dh_auto_install:
+	# Install the Python package
+	python3 -m pip install dist/*.whl --root=debian/smp --prefix=/usr
+	dh_auto_install
+
+override_dh_install:
+	# Install the model file
+	mkdir -p debian/smp/usr/lib/smp/models
+	cp -L Qwen3-Embedding-0.6B-GGUF/Qwen3-Embedding-0.6B-Q8_0.gguf debian/smp/usr/lib/smp/models/
+	
+	# Install environment setup script
+	mkdir -p debian/smp/etc/profile.d
+	install -m 644 debian/smp.env debian/smp/etc/profile.d/smp.sh
+	
+	# Install systemd service file for the server (optional)
+	mkdir -p debian/smp/lib/systemd/system
+	install -m 644 debian/smp-server.service debian/smp/lib/systemd/system/smp-server.service
+	
+	dh_install
+
+override_dh_python3:
+	dh_python3 --no-guessing-versions
+
+override_dh_gencontrol:
+	dh_gencontrol -- -Vpython3:Version=$(shell python3 --version | cut -d' ' -f2 | cut -d'.' -f1,2)
+
+override_dh_clean:
+	dh_clean
+	rm -rf dist build *.egg-info
+
+.PHONY: override_dh_auto_build override_dh_auto_install override_dh_install override_dh_python3 override_dh_gencontrol override_dh_clean

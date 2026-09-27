@@ -1,0 +1,9 @@
+smp (0.1.0-1) unstable; urgency=medium
+
+  * Initial Debian packaging of SMP
+  * Bundled Qwen3-Embedding-0.6B-GGUF model
+  * JSON-RPC and MCP server support
+  * Semantic search with 1024-dimensional embeddings
+  * Multi-language code intelligence (14 languages)
+
+ -- SMP Team <team@smp.local>  Mon, 21 Sep 2026 00:00:00 +0000

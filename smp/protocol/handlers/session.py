@@ -305,19 +305,25 @@ async def checkpoint(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, A
         return {"checkpoint_id": "", "created": False, "error": "session_not_found"}
 
     fingerprints: dict[str, list[str]] = {}
+    node_index: dict[str, dict[str, str]] = {}
     for file_path in p.files:
         nodes = await graph.find_nodes(file_path=file_path)
         fingerprints[file_path] = [node.fingerprint() for node in nodes]
+        node_index[file_path] = {node.id: node.content_hash() for node in nodes}
 
     checkpoint_id = f"ckpt_{uuid.uuid4().hex[:10]}"
     record = {
         "checkpoint_id": checkpoint_id,
         "files": list(p.files),
         "fingerprints": fingerprints,
+        "node_index": node_index,
         "created_at": _now_iso(),
     }
     session.setdefault("checkpoints", []).append(record)
     await _persist_session(graph, session)
+    # Also persist under the checkpoint id (kind=checkpoint) so smp/diff can
+    # resolve either snapshot directly without knowing the owning session.
+    await _persist_session(graph, {"session_id": checkpoint_id, "kind": "checkpoint", **record})
     await _record_audit(
         graph,
         ctx,

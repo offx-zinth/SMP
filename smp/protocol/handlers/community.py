@@ -32,17 +32,28 @@ def _community_store(ctx: dict[str, Any]) -> dict[str, Any]:
 
 async def _detect_components(
     graph: Any, edge_types: set[EdgeType] | None = None
-) -> tuple[dict[str, list[str]], dict[str, str]]:
-    """Find connected components in the undirected projection of the graph."""
+) -> tuple[dict[str, list[str]], dict[str, str], int]:
+    """Find connected components in the undirected projection of the graph.
+
+    Returns ``(components, node_to_community, matched_edges)``. Only ids
+    that resolve to real nodes become members: edge endpoints such as the
+    unresolved ``::name::`` placeholders are leaves (nothing is sourced
+    from them), so excluding them cannot fragment real connectivity but
+    keeps community sizes truthful (never larger than the node count).
+    """
     nodes = await graph.find_nodes()
+    known_ids = {node.id for node in nodes}
     adjacency: dict[str, set[str]] = defaultdict(set)
+    matched_edges = 0
     for node in nodes:
         edges = await graph.get_edges(node.id, direction="both")
         for edge in edges:
             if edge_types and edge.type not in edge_types:
                 continue
-            adjacency[edge.source_id].add(edge.target_id)
-            adjacency[edge.target_id].add(edge.source_id)
+            matched_edges += 1
+            if edge.source_id in known_ids and edge.target_id in known_ids:
+                adjacency[edge.source_id].add(edge.target_id)
+                adjacency[edge.target_id].add(edge.source_id)
 
     visited: set[str] = set()
     components: dict[str, list[str]] = {}
@@ -59,12 +70,14 @@ async def _detect_components(
             if current in visited:
                 continue
             visited.add(current)
+            if current not in known_ids:
+                continue
             members.append(current)
             node_to_community[current] = component_id
             stack.extend(adjacency.get(current, set()) - visited)
         components[component_id] = members
 
-    return components, node_to_community
+    return components, node_to_community, matched_edges
 
 
 async def community_detect(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
@@ -83,7 +96,7 @@ async def community_detect(params: dict[str, Any], ctx: dict[str, Any]) -> dict[
         if not edge_types:
             edge_types = None
 
-    components, node_to_id = await _detect_components(graph, edge_types=edge_types)
+    components, node_to_id, matched_edges = await _detect_components(graph, edge_types=edge_types)
 
     store = _community_store(ctx)
     store["by_id"] = components
@@ -100,12 +113,16 @@ async def community_detect(params: dict[str, Any], ctx: dict[str, Any]) -> dict[
     ]
     summary.sort(key=lambda c: -c["size"])
 
-    return {
+    response: dict[str, Any] = {
         "level": store["level"],
         "communities": summary,
         "total": len(components),
         "node_count": sum(len(v) for v in components.values()),
+        "edges_matched": matched_edges,
     }
+    if edge_types is not None and matched_edges == 0:
+        response["warning"] = "no edges matched the relationship_types filter; every node is a singleton community"
+    return response
 
 
 async def community_list(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
@@ -115,7 +132,7 @@ async def community_list(params: dict[str, Any], ctx: dict[str, Any]) -> dict[st
     store = _community_store(ctx)
 
     if not store["by_id"]:
-        components, node_to_id = await _detect_components(graph)
+        components, node_to_id, _ = await _detect_components(graph)
         store["by_id"] = components
         store["node_to_id"] = node_to_id
         store["level"] = 0
@@ -140,7 +157,7 @@ async def community_get(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str
     store = _community_store(ctx)
 
     if not store["by_id"]:
-        components, node_to_id = await _detect_components(graph)
+        components, node_to_id, _ = await _detect_components(graph)
         store["by_id"] = components
         store["node_to_id"] = node_to_id
 
@@ -196,7 +213,7 @@ async def community_boundaries(params: dict[str, Any], ctx: dict[str, Any]) -> d
     store = _community_store(ctx)
 
     if not store["by_id"]:
-        components, node_to_id = await _detect_components(graph)
+        components, node_to_id, _ = await _detect_components(graph)
         store["by_id"] = components
         store["node_to_id"] = node_to_id
 

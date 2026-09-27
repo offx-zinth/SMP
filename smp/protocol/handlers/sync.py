@@ -123,20 +123,38 @@ async def sync(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     changed = sorted(
         node_id for node_id in remote_ids & local_ids if remote_signatures[node_id] != local_signatures[node_id]
     )
+    stats = {
+        "local_count": len(local_signatures),
+        "remote_count": len(remote_signatures),
+        "missing_locally": len(missing_locally),
+        "missing_remotely": len(missing_remotely),
+        "changed": len(changed),
+    }
+
+    # Cap the id lists: on kernel-scale graphs ``missing_remotely`` alone is
+    # ~40MB of JSON. Full counts stay available under ``stats``.
+    limit = p.max_entries if p.max_entries and p.max_entries > 0 else None
+    truncated: dict[str, bool] = {}
+    if limit is not None:
+        missing_locally, truncated["missing_locally"] = _cap_list(missing_locally, limit)
+        missing_remotely, truncated["missing_remotely"] = _cap_list(missing_remotely, limit)
+        changed, truncated["changed"] = _cap_list(changed, limit)
 
     return {
         "in_sync": not (missing_locally or missing_remotely or changed),
         "missing_locally": missing_locally,
         "missing_remotely": missing_remotely,
         "changed": changed,
-        "stats": {
-            "local_count": len(local_signatures),
-            "remote_count": len(remote_signatures),
-            "missing_locally": len(missing_locally),
-            "missing_remotely": len(missing_remotely),
-            "changed": len(changed),
-        },
+        "truncated": truncated,
+        "stats": stats,
     }
+
+
+def _cap_list(items: list[str], limit: int) -> tuple[list[str], bool]:
+    """Truncate *items* to *limit*, reporting whether anything was cut."""
+    if len(items) <= limit:
+        return items, False
+    return items[:limit], True
 
 
 async def index_import(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:

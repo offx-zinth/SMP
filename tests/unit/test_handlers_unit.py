@@ -256,15 +256,17 @@ class TestUpdateHandler:
         assert result["nodes"] == 0
 
     @pytest.mark.asyncio
-    async def test_update_ensure_parsed_success(self, mock_ctx):
+    async def test_update_ensure_parsed_success(self, mock_ctx, tmp_path):
+        target = tmp_path / "main.py"
+        target.write_text("def main():\n    pass\n")
         graph = mock_ctx["graph"]
         graph.invalidate_file = AsyncMock()
         graph.ensure_parsed = AsyncMock(return_value=[make_node("n1"), make_node("n2")])
-        params = {"file_path": "main.py"}
+        params = {"file_path": str(target)}
         result = await memory.update(params, mock_ctx)
         assert result["nodes"] == 2
         assert result["errors"] == 0
-        graph.ensure_parsed.assert_called_once_with("main.py")
+        graph.ensure_parsed.assert_called_once_with(str(target))
 
     @pytest.mark.asyncio
     async def test_update_file_not_found(self, mock_ctx):
@@ -276,30 +278,36 @@ class TestUpdateHandler:
         assert result["errors"] == 1
 
     @pytest.mark.asyncio
-    async def test_update_generic_exception(self, mock_ctx):
+    async def test_update_generic_exception(self, mock_ctx, tmp_path):
+        target = tmp_path / "broken.py"
+        target.write_text("def broken(:\n")
         graph = mock_ctx["graph"]
         graph.ensure_parsed = AsyncMock(side_effect=RuntimeError("parse failed"))
-        params = {"file_path": "broken.py"}
+        params = {"file_path": str(target)}
         result = await memory.update(params, mock_ctx)
         assert result["error"] == "parse failed"
         assert result["errors"] == 1
 
     @pytest.mark.asyncio
-    async def test_update_parse_file_fallback(self, mock_ctx):
+    async def test_update_parse_file_fallback(self, mock_ctx, tmp_path):
+        target = tmp_path / "main.py"
+        target.write_text("def main():\n    pass\n")
         graph = mock_ctx["graph"]
         del graph.ensure_parsed
         graph.parse_file = AsyncMock(return_value=[make_node("n1")])
-        params = {"file_path": "main.py"}
+        params = {"file_path": str(target)}
         result = await memory.update(params, mock_ctx)
         assert result["nodes"] == 1
 
     @pytest.mark.asyncio
-    async def test_update_no_graph_support(self, mock_ctx):
+    async def test_update_no_graph_support(self, mock_ctx, tmp_path):
+        target = tmp_path / "main.py"
+        target.write_text("def main():\n    pass\n")
         graph = mock_ctx["graph"]
         del graph.ensure_parsed
         del graph.parse_file
         del graph.invalidate_file
-        params = {"file_path": "main.py"}
+        params = {"file_path": str(target)}
         result = await memory.update(params, mock_ctx)
         assert "graph store does not support live parsing" in result["message"]
 
@@ -1063,6 +1071,39 @@ class TestReviewApproveHandler:
         result = await review.review_approve(params, mock_ctx)
         assert result["approved"] is True
         assert result["status"] == "approved"
+
+
+class TestLoadReviewFallback:
+    """Graph fallback when the in-memory review store is cold (e.g. restart)."""
+
+    @pytest.fixture
+    def mock_ctx(self):
+        return {"graph": MagicMock(), "_reviews": {}}
+
+    @pytest.mark.asyncio
+    async def test_approve_loads_review_from_graph(self, mock_ctx):
+        graph = mock_ctx["graph"]
+        graph.get_session = AsyncMock(
+            return_value={
+                "review_id": "rev9",
+                "kind": "review",
+                "approvals": [],
+                "rejections": [],
+                "status": "pending",
+            }
+        )
+        graph.upsert_session = AsyncMock()
+        result = await review.review_approve({"review_id": "rev9", "reviewer": "r1"}, mock_ctx)
+        assert result["approved"] is True
+        assert mock_ctx["_reviews"]["rev9"]["review_id"] == "rev9"
+
+    @pytest.mark.asyncio
+    async def test_non_review_session_record_ignored(self, mock_ctx):
+        graph = mock_ctx["graph"]
+        graph.get_session = AsyncMock(return_value={"session_id": "s1", "kind": "session"})
+        result = await review.review_approve({"review_id": "s1", "reviewer": "r1"}, mock_ctx)
+        assert result["approved"] is False
+        assert result["error"] == "review_not_found"
 
 
 class TestReviewRejectHandler:

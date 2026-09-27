@@ -1,0 +1,20 @@
+[Unit]
+Description=SMP JSON-RPC Server (Structural Memory Protocol)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=%h
+Environment=SMP_MODEL_PATH=/usr/lib/smp/models/Qwen3-Embedding-0.6B-Q8_0.gguf
+Environment=SMP_GRAPH_PATH=.smp/graph.smpg
+Environment=SMP_VECTOR_PATH=.smp/smp.smpv
+ExecStart=/usr/bin/smp serve --json-log
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

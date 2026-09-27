@@ -7,6 +7,7 @@ All models use msgspec.Struct for zero-cost serialization and validation.
 from __future__ import annotations
 
 import enum
+import hashlib
 from typing import Any
 
 import msgspec
@@ -137,6 +138,20 @@ class GraphNode(msgspec.Struct):
     def fingerprint(self) -> str:
         """Deterministic identity key for deduplication."""
         return f"{self.file_path}::{self.type.value}::{self.structural.name}::{self.structural.start_line}"
+
+    def content_hash(self) -> str:
+        """Content-sensitive hash: same node id, different hash means modified."""
+        payload = "|".join(
+            [
+                self.id,
+                self.type.value,
+                self.structural.name,
+                self.structural.signature,
+                str(self.structural.start_line),
+                str(self.structural.end_line),
+            ]
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 class GraphEdge(msgspec.Struct):
@@ -422,12 +437,30 @@ class SearchParams(msgspec.Struct):
     top_k: int = 5
 
 
+class SemanticSearchParams(msgspec.Struct):
+    """Parameters for smp/semantic_search."""
+
+    query: str = ""
+    top_k: int = 5
+    where: dict[str, Any] = msgspec.field(default_factory=dict)
+    instruction: str | None = None
+
+
 class VectorSearchParams(msgspec.Struct):
     """Parameters for smp/vector/search."""
 
     embedding: list[float]
     top_k: int = 5
     where: dict[str, Any] = msgspec.field(default_factory=dict)
+
+
+class VectorSemanticSearchParams(msgspec.Struct):
+    """Parameters for smp/vector/semantic_search."""
+
+    query: str
+    top_k: int = 5
+    where: dict[str, Any] = msgspec.field(default_factory=dict)
+    instruction: str | None = None
 
 
 class FlowParams(msgspec.Struct):
@@ -645,6 +678,7 @@ class MerkleSyncParams(msgspec.Struct):
     """Parameters for smp/sync."""
 
     remote_data: dict[str, Any] = msgspec.field(default_factory=dict)
+    max_entries: int = 1000
 
 
 class MerkleImportParams(msgspec.Struct):

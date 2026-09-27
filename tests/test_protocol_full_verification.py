@@ -872,9 +872,9 @@ class TestDispatchRegistryCoverage:
     """Ensure every method in ``_HANDLERS`` is covered by this module."""
 
     def test_handler_count_matches_inventory(self) -> None:
-        # Sanity: 52 methods are documented in this module's traceability table.
+        # Sanity: 54 methods are documented in this module's traceability table.
         # If a new handler is added without a test, this number must change.
-        assert len(_HANDLERS) == 52
+        assert len(_HANDLERS) == 54
 
 
 # ---------------------------------------------------------------------------

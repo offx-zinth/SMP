@@ -10,7 +10,7 @@ from typing import Any
 
 import msgspec
 
-from smp.core.models import VectorSearchParams
+from smp.core.models import VectorSearchParams, VectorSemanticSearchParams
 from smp.logging import get_logger
 from smp.store.interfaces import VectorStore
 
@@ -32,6 +32,31 @@ async def vector_search(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str
         embedding=p.embedding,
         top_k=p.top_k,
         where=p.where,
+    )
+
+    return {
+        "results": results,
+        "count": len(results),
+    }
+
+
+async def vector_semantic_search(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/vector/semantic_search`` — text-to-vector search.
+
+    Params:
+        query: str - Natural language query text.
+        top_k: int - Number of results.
+        where: dict[str, Any] - Metadata filter.
+        instruction: str | None - Optional instruction prefix for query embedding.
+    """
+    p = msgspec.convert(params, VectorSemanticSearchParams)
+    vector_store: VectorStore = ctx["vector_store"]
+
+    results = await vector_store.semantic_search(
+        query=p.query,
+        top_k=p.top_k,
+        where=p.where or None,
+        instruction=p.instruction,
     )
 
     return {

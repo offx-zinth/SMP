@@ -650,72 +650,92 @@ class TestFindFlow:
 
 
 class TestDiff:
-    """Tests for diff() method."""
+    """Tests for diff() method (checkpoint/live snapshot semantics)."""
 
     @pytest.fixture
     def mock_store(self) -> MagicMock:
         """Create a mock graph store."""
         store = MagicMock()
+        store.find_nodes = AsyncMock(return_value=[])
         store.find_nodes_by_scope = AsyncMock(return_value=[])
+        store.get_session = AsyncMock(return_value=None)
         return store
+
+    def _checkpoint(self, checkpoint_id: str, node_index: dict[str, dict[str, str]]) -> dict[str, object]:
+        return {
+            "session_id": checkpoint_id,
+            "kind": "checkpoint",
+            "checkpoint_id": checkpoint_id,
+            "files": sorted(node_index),
+            "fingerprints": {},
+            "node_index": node_index,
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
 
     @pytest.mark.asyncio
     async def test_diff_added_nodes(self, mock_store: MagicMock) -> None:
-        """Test diff with added nodes."""
-        from_nodes = [make_node("n1", NodeType.FUNCTION, "f1.py", "n1")]
-        to_nodes = [
+        """Test diff with added nodes (checkpoint -> live)."""
+        live = [
             make_node("n1", NodeType.FUNCTION, "f1.py", "n1"),
             make_node("n2", NodeType.FUNCTION, "f2.py", "n2"),
         ]
-        mock_store.find_nodes_by_scope = AsyncMock(side_effect=[from_nodes, to_nodes])
+        mock_store.find_nodes = AsyncMock(return_value=live)
+        mock_store.get_session = AsyncMock(
+            return_value=self._checkpoint("ckpt_1", {"f1.py": {"n1": live[0].content_hash()}})
+        )
 
         engine = DefaultQueryEngine(graph_store=mock_store)
-        result = await engine.diff("v1", "v2")
+        result = await engine.diff("ckpt_1", "live")
 
-        assert len(result["added"]) == 1
+        assert result["added"] == ["n2"]
+        assert result["files_added"] == ["f2.py"]
 
     @pytest.mark.asyncio
     async def test_diff_removed_nodes(self, mock_store: MagicMock) -> None:
         """Test diff with removed nodes."""
-        from_nodes = [
-            make_node("n1", NodeType.FUNCTION, "f1.py", "n1"),
-            make_node("n2", NodeType.FUNCTION, "f2.py", "n2"),
-        ]
-        to_nodes = [make_node("n1", NodeType.FUNCTION, "f1.py", "n1")]
-        mock_store.find_nodes_by_scope = AsyncMock(side_effect=[from_nodes, to_nodes])
+        live = [make_node("n1", NodeType.FUNCTION, "f1.py", "n1")]
+        mock_store.find_nodes = AsyncMock(return_value=live)
+        mock_store.get_session = AsyncMock(
+            return_value=self._checkpoint("ckpt_1", {"f1.py": {"n1": live[0].content_hash(), "n2": "oldhash"}})
+        )
 
         engine = DefaultQueryEngine(graph_store=mock_store)
-        result = await engine.diff("v1", "v2")
+        result = await engine.diff("ckpt_1", "live")
 
-        assert len(result["removed"]) == 1
+        assert result["removed"] == ["n2"]
+        assert result["files_changed"] == ["f1.py"]
 
     @pytest.mark.asyncio
     async def test_diff_changed_nodes(self, mock_store: MagicMock) -> None:
         """Test diff detects changed nodes."""
-        node = make_node("n1", NodeType.FUNCTION, "f1.py", "n1", source_hash="abc")
-        changed_node = make_node("n1", NodeType.FUNCTION, "f1.py", "n1", source_hash="xyz")
-        mock_store.find_nodes_by_scope = AsyncMock(
-            side_effect=[
-                [node],
-                [changed_node],
-            ]
-        )
+        live = [make_node("n1", NodeType.FUNCTION, "f1.py", "n1")]
+        mock_store.find_nodes = AsyncMock(return_value=live)
+        mock_store.get_session = AsyncMock(return_value=self._checkpoint("ckpt_1", {"f1.py": {"n1": "stalehash"}}))
 
         engine = DefaultQueryEngine(graph_store=mock_store)
-        result = await engine.diff("v1", "v2")
+        result = await engine.diff("ckpt_1", "live")
 
-        assert len(result["changed"]) == 1
+        assert result["changed"] == ["n1"]
+        assert result["files_changed"] == ["f1.py"]
 
     @pytest.mark.asyncio
     async def test_diff_stats(self, mock_store: MagicMock) -> None:
         """Test diff includes stats."""
-        mock_store.find_nodes_by_scope = AsyncMock(return_value=[])
-
         engine = DefaultQueryEngine(graph_store=mock_store)
-        result = await engine.diff("v1", "v2")
+        result = await engine.diff("live", "live")
 
         assert "stats" in result
         assert "added_count" in result["stats"]
+        assert "files_changed" in result
+
+    @pytest.mark.asyncio
+    async def test_diff_unknown_snapshot(self, mock_store: MagicMock) -> None:
+        """Test diff with an unknown snapshot id."""
+        engine = DefaultQueryEngine(graph_store=mock_store)
+        result = await engine.diff("ckpt_nope", "live")
+
+        assert result["error"] == "snapshot_not_found"
+        assert result["missing_snapshot"] == "ckpt_nope"
 
 
 class TestPlan:

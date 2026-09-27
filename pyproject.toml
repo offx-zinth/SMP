@@ -37,6 +37,7 @@ dependencies = [
     "watchdog>=4.0",
     "faiss-cpu>=1.7",
     "numpy>=1.26",
+    "llama-cpp-python>=0.3",
 ]
 
 [project.optional-dependencies]
@@ -62,6 +63,11 @@ norecursedirs = ["__pycache__", ".venv", "fixtures", "test_codebase", ".git", ".
 [tool.ruff]
 target-version = "py311"
 line-length = 120
+extend-exclude = [
+    # Root-level ad-hoc verification scripts from manual tool testing.
+    "manual_test_run.py",
+    "test_all_tools.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "SIM", "ANN"]

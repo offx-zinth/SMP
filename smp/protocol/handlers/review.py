@@ -47,6 +47,27 @@ async def _persist(graph: Any, record: dict[str, Any]) -> None:
         return
 
 
+async def _load_review(graph: Any, ctx: dict[str, Any], review_id: str) -> dict[str, Any] | None:
+    """Load a review from memory, falling back to the durable session record.
+
+    ``review_create`` persists every review via ``upsert_session`` (keyed by
+    review id), but the in-memory store is per-process — without the graph
+    fallback, comment/approve/reject/pr break after a restart (or whenever
+    the process-level cache is cold).
+    """
+    review = _review_store(ctx).get(review_id)
+    if review is not None:
+        return review
+    try:
+        record: dict[str, Any] | None = await graph.get_session(review_id)
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(record, dict) and record.get("kind") == "review":
+        _review_store(ctx)[review_id] = record
+        return record
+    return None
+
+
 async def review_create(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/review/create``."""
     p = msgspec.convert(params, ReviewCreateParams)
@@ -85,7 +106,7 @@ async def review_approve(params: dict[str, Any], ctx: dict[str, Any]) -> dict[st
     p = msgspec.convert(params, ReviewApproveParams)
     graph = ctx["graph"]
 
-    review = _review_store(ctx).get(p.review_id)
+    review = await _load_review(graph, ctx, p.review_id)
     if review is None:
         return {"review_id": p.review_id, "approved": False, "error": "review_not_found"}
 
@@ -107,7 +128,7 @@ async def review_reject(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str
     p = msgspec.convert(params, ReviewRejectParams)
     graph = ctx["graph"]
 
-    review = _review_store(ctx).get(p.review_id)
+    review = await _load_review(graph, ctx, p.review_id)
     if review is None:
         return {"review_id": p.review_id, "rejected": False, "error": "review_not_found"}
 
@@ -128,7 +149,7 @@ async def review_comment(params: dict[str, Any], ctx: dict[str, Any]) -> dict[st
     p = msgspec.convert(params, ReviewCommentParams)
     graph = ctx["graph"]
 
-    review = _review_store(ctx).get(p.review_id)
+    review = await _load_review(graph, ctx, p.review_id)
     if review is None:
         return {"review_id": p.review_id, "added": False, "error": "review_not_found"}
 
@@ -157,7 +178,7 @@ async def pr_create(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, An
     graph = ctx["graph"]
     provider = get_provider(ctx)
 
-    review = _review_store(ctx).get(p.review_id)
+    review = await _load_review(graph, ctx, p.review_id)
     if p.review_id and review is None:
         return {"pr_id": "", "created": False, "error": "review_not_found"}
 

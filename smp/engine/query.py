@@ -12,12 +12,28 @@ from typing import Any
 from smp.core.models import EdgeType, GraphNode, NodeType
 from smp.logging import get_logger
 from smp.store.graph.parser import CodeParser
-from smp.store.interfaces import GraphStore
+from smp.store.interfaces import GraphStore, VectorStore
 
 log = get_logger(__name__)
-
 _HTTP_VERB_DECORATORS = {"get", "post", "put", "delete", "patch", "head", "options"}
+
 _UTILITY_PATH_SEGMENTS = {"/utils", "/lib", "/shared", "/helpers"}
+
+_LIVE_SNAPSHOTS = frozenset({"", "live", "current"})
+
+_DIFF_ID_CAP = 5000
+
+
+def _in_scope(file_path: str, scope: str) -> bool:
+    """Check whether *file_path* falls under a diff scope prefix."""
+    return not scope or scope == "full" or file_path.startswith(scope)
+
+
+def _cap_ids(items: list[str], limit: int = _DIFF_ID_CAP) -> tuple[list[str], bool]:
+    """Truncate an id list, reporting whether anything was cut."""
+    if len(items) <= limit:
+        return items, False
+    return items[:limit], True
 
 
 class DefaultQueryEngine:
@@ -26,9 +42,11 @@ class DefaultQueryEngine:
     def __init__(
         self,
         graph_store: GraphStore,
+        vector_store: VectorStore | None = None,
         enricher: Any | None = None,
     ) -> None:
         self._graph = graph_store
+        self._vector_store = vector_store
         self._enricher = enricher
 
     def _node_to_dict(self, node: GraphNode) -> dict[str, Any]:
@@ -58,6 +76,7 @@ class DefaultQueryEngine:
         if not node:
             # Check if query looks like a file path
             import os
+
             if "/" in query or query.endswith(".py"):
                 candidates = await self._graph.find_nodes(file_path=query)
                 if candidates:
@@ -124,7 +143,7 @@ class DefaultQueryEngine:
 
     async def _resolve_node_id(self, query: str) -> str | None:
         """Resolve a node id, exact file path, structural name, or id fragment to a node id.
-        
+
         Improved resolution strategy:
         1. Exact match by full node ID
         2. Exact match by name with preference for most connected node
@@ -134,14 +153,14 @@ class DefaultQueryEngine:
         """
         if await self._graph.get_node(query) is not None:
             return query
-        
+
         # Find all nodes with matching name
         candidates = await self._graph.find_nodes(name=query)
         if candidates:
             # If multiple candidates, prefer the one with most connections (edges),
             # then use deterministic file path ordering as tiebreaker
             if len(candidates) > 1:
-                best_candidate = None
+                best_candidate = candidates[0]
                 best_count = -1
                 for candidate in sorted(candidates, key=lambda n: n.file_path):
                     outgoing = await self._graph.get_edges(candidate.id, direction="outgoing")
@@ -152,12 +171,12 @@ class DefaultQueryEngine:
                         best_candidate = candidate
                 return best_candidate.id
             return candidates[0].id
-        
+
         if "/" in query:
             candidates = await self._graph.find_nodes(file_path=query)
             if candidates:
                 return candidates[0].id
-        
+
         for node in await self._graph.find_nodes():
             if node.id.startswith(query) or query in node.id:
                 return node.id
@@ -171,6 +190,7 @@ class DefaultQueryEngine:
     ) -> dict[str, Any]:
         # Normalize file path for matching - try both as-is and with cwd prefix
         import os
+
         file_nodes = await self._graph.find_nodes(file_path=file_path)
         if not file_nodes:
             # Try absolute path
@@ -180,7 +200,9 @@ class DefaultQueryEngine:
         if not file_nodes:
             # Try substring match
             all_nodes = await self._graph.find_nodes()
-            file_nodes = [n for n in all_nodes if file_path in n.file_path or os.path.basename(file_path) in n.file_path]
+            file_nodes = [
+                n for n in all_nodes if file_path in n.file_path or os.path.basename(file_path) in n.file_path
+            ]
         if not file_nodes:
             return {"error": f"No nodes found for {file_path}"}
 
@@ -213,6 +235,14 @@ class DefaultQueryEngine:
             source = await self._graph.get_node(te.source_id)
             if source and source.file_path not in test_file_paths:
                 test_file_paths.append(source.file_path)
+
+        if not defines_nodes:
+            # No DEFINES edges (parsers only emit them for some languages):
+            # fall back to the file's own symbol nodes so defines stay useful.
+            for sibling in file_nodes[:100]:
+                defines_nodes.append(self._node_to_dict(sibling))
+                complexities.append(sibling.structural.complexity)
+                exported_symbols.append(sibling.structural.name)
 
         has_tests = len(test_file_paths) > 0
 
@@ -555,6 +585,25 @@ class DefaultQueryEngine:
 
         return {"matches": results, "total": len(results)}
 
+    async def semantic_search(
+        self,
+        query: str,
+        top_k: int = 5,
+        where: dict[str, Any] | None = None,
+        instruction: str | None = None,
+    ) -> dict[str, Any]:
+        """Semantic search over stored vectors using a text query."""
+        if self._vector_store is None:
+            return {"matches": [], "total": 0, "hint": "No vector store configured"}
+
+        results = await self._vector_store.semantic_search(
+            query=query,
+            top_k=top_k,
+            where=where,
+            instruction=instruction,
+        )
+        return {"matches": results, "total": len(results)}
+
     async def find_flow(
         self,
         start: str,
@@ -673,36 +722,148 @@ class DefaultQueryEngine:
         to_snapshot: str,
         scope: str = "full",
     ) -> dict[str, Any]:
-        """Compare two snapshots and return the differences."""
-        from_nodes = await self._graph.find_nodes_by_scope(from_snapshot)
-        to_nodes = await self._graph.find_nodes_by_scope(to_snapshot)
+        """Compare two snapshots and return the differences.
 
-        from_ids = {n.id for n in from_nodes}
-        to_ids = {n.id for n in to_nodes}
+        Each snapshot is either a checkpoint id (``ckpt_...``, as returned by
+        ``smp/checkpoint``) or a live alias (``""``, ``"live"``, ``"current"``)
+        meaning the current graph state. ``scope`` optionally restricts the
+        comparison to files under a path prefix.
+        """
+        from_counters, from_index = await self._resolve_snapshot(from_snapshot, scope)
+        to_counters, to_index = await self._resolve_snapshot(to_snapshot, scope)
 
-        added = to_ids - from_ids
-        removed = from_ids - to_ids
-        common = from_ids & to_ids
-
-        changed: list[str] = []
-        for node_id in common:
-            from_node = next((n for n in from_nodes if n.id == node_id), None)
-            to_node = next((n for n in to_nodes if n.id == node_id), None)
-            if from_node and to_node and from_node.semantic.source_hash != to_node.semantic.source_hash:
-                changed.append(node_id)
-
-        return {
+        base: dict[str, Any] = {
             "from_snapshot": from_snapshot,
             "to_snapshot": to_snapshot,
-            "added": list(added),
-            "removed": list(removed),
-            "changed": changed,
+            "added": [],
+            "removed": [],
+            "changed": [],
+            "files_added": [],
+            "files_removed": [],
+            "files_changed": [],
+            "node_detail": "full",
+            "truncated": {},
             "stats": {
-                "added_count": len(added),
-                "removed_count": len(removed),
-                "changed_count": len(changed),
+                "added_count": 0,
+                "removed_count": 0,
+                "changed_count": 0,
+                "files_added": 0,
+                "files_removed": 0,
+                "files_changed": 0,
             },
         }
+        if from_counters is None or to_counters is None:
+            base["error"] = "snapshot_not_found"
+            base["missing_snapshot"] = from_snapshot if from_counters is None else to_snapshot
+            return base
+
+        from_files = set(from_counters)
+        to_files = set(to_counters)
+        files_added = sorted(to_files - from_files)
+        files_removed = sorted(from_files - to_files)
+        files_changed = sorted(f for f in from_files & to_files if from_counters[f] != to_counters[f])
+
+        added: set[str] = set()
+        removed: set[str] = set()
+        changed: set[str] = set()
+        legacy = from_index is None or to_index is None
+        if not legacy:
+            assert from_index is not None and to_index is not None
+            for file_path in sorted(from_files & to_files):
+                if from_counters[file_path] == to_counters[file_path]:
+                    continue
+                from_ids = set(from_index[file_path])
+                to_ids = set(to_index[file_path])
+                added |= to_ids - from_ids
+                removed |= from_ids - to_ids
+                changed |= {n for n in from_ids & to_ids if from_index[file_path][n] != to_index[file_path][n]}
+            for file_path in files_added:
+                added |= set(to_index[file_path])
+            for file_path in files_removed:
+                removed |= set(from_index[file_path])
+
+        capped_added, trunc_added = _cap_ids(sorted(added))
+        capped_removed, trunc_removed = _cap_ids(sorted(removed))
+        capped_changed, trunc_changed = _cap_ids(sorted(changed))
+        base.update(
+            {
+                "added": capped_added,
+                "removed": capped_removed,
+                "changed": capped_changed,
+                "files_added": files_added,
+                "files_removed": files_removed,
+                "files_changed": files_changed,
+                "node_detail": "files_only" if legacy else "full",
+                "truncated": {
+                    "added": trunc_added,
+                    "removed": trunc_removed,
+                    "changed": trunc_changed,
+                },
+                "stats": {
+                    "added_count": len(added),
+                    "removed_count": len(removed),
+                    "changed_count": len(changed),
+                    "files_added": len(files_added),
+                    "files_removed": len(files_removed),
+                    "files_changed": len(files_changed),
+                },
+            }
+        )
+        return base
+
+    async def _resolve_snapshot(
+        self, snapshot: str, scope: str
+    ) -> tuple[dict[str, dict[str, int]] | None, dict[str, dict[str, str]] | None]:
+        """Resolve a snapshot to per-file fingerprint counters plus an optional
+        per-file ``{node_id: content_hash}`` index.
+
+        Returns ``(counters, node_index)``; ``counters`` is ``None`` when the
+        snapshot id is unknown. ``node_index`` is ``None`` for legacy
+        checkpoints (fingerprints only), which support file-level diffs.
+        """
+        if snapshot in _LIVE_SNAPSHOTS:
+            if scope and scope != "full":
+                nodes = await self._graph.find_nodes_by_scope(scope)
+            else:
+                nodes = await self._graph.find_nodes()
+            counters: dict[str, dict[str, int]] = {}
+            index: dict[str, dict[str, str]] = {}
+            for node in nodes:
+                fp = node.content_hash()
+                file_counts = counters.setdefault(node.file_path, {})
+                file_counts[fp] = file_counts.get(fp, 0) + 1
+                index.setdefault(node.file_path, {})[node.id] = fp
+            return counters, index
+        try:
+            record = await self._graph.get_session(snapshot)
+        except (NotImplementedError, AttributeError):
+            return None, None
+        if not isinstance(record, dict) or record.get("kind") != "checkpoint":
+            return None, None
+        raw_index = record.get("node_index")
+        if isinstance(raw_index, dict) and raw_index:
+            counters = {}
+            index = {}
+            for file_path, ids in raw_index.items():
+                if not isinstance(ids, dict) or not _in_scope(file_path, scope):
+                    continue
+                file_counts = counters.setdefault(file_path, {})
+                file_index = index.setdefault(file_path, {})
+                for node_id, fp in ids.items():
+                    fp_str = str(fp)
+                    file_counts[fp_str] = file_counts.get(fp_str, 0) + 1
+                    file_index[str(node_id)] = fp_str
+            return counters, index
+        counters = {}
+        legacy = record.get("fingerprints") or {}
+        for file_path, fps in legacy.items():
+            if not _in_scope(file_path, scope) or not isinstance(fps, list):
+                continue
+            file_counts = counters.setdefault(file_path, {})
+            for fp in fps:
+                fp_str = str(fp)
+                file_counts[fp_str] = file_counts.get(fp_str, 0) + 1
+        return counters, None
 
     async def plan(
         self,
@@ -715,17 +876,37 @@ class DefaultQueryEngine:
         file_nodes = await self._graph.find_nodes(file_path=target_file)
 
         affected_nodes: list[str] = []
+        affected: list[dict[str, Any]] = []
         total_callers = 0
         for node in file_nodes:
             callers = await self._graph.traverse(node.id, EdgeType.CALLS, depth=10, max_nodes=200, direction="incoming")
             if callers:
                 affected_nodes.append(node.id)
+                affected.append(
+                    {
+                        "node_id": node.id,
+                        "name": node.structural.name,
+                        "callers": len(callers),
+                    }
+                )
                 total_callers += len(callers)
 
+        affected.sort(key=lambda a: -a["callers"])
+        top_names = ", ".join(a["name"] for a in affected[:5])
         steps: list[dict[str, str]] = [
             {"step": "1", "action": "Backup current state", "details": f"Snapshot {target_file}"},
-            {"step": "2", "action": "Apply changes", "details": change_description},
-            {"step": "3", "action": "Run tests", "details": f"Test affected nodes: {len(affected_nodes)}"},
+            {
+                "step": "2",
+                "action": "Apply changes",
+                "details": f"{change_description} ({len(affected)} functions: {top_names})"
+                if top_names
+                else change_description,
+            },
+            {
+                "step": "3",
+                "action": "Run tests",
+                "details": f"Test affected nodes: {len(affected_nodes)} (blast radius: {total_callers} callers)",
+            },
         ]
 
         if change_type == "signature_change":
@@ -733,7 +914,7 @@ class DefaultQueryEngine:
                 {
                     "step": "4",
                     "action": "Update callers",
-                    "details": f"Update {len(affected_nodes)} dependent functions",
+                    "details": (f"Update {total_callers} callers across {len(affected_nodes)} functions: {top_names}"),
                 }
             )
 
@@ -742,6 +923,8 @@ class DefaultQueryEngine:
             "target_file": target_file,
             "change_type": change_type,
             "affected_nodes": affected_nodes,
+            "affected": affected,
+            "total_callers": total_callers,
             "steps": steps,
             "risk_level": "high" if total_callers > 10 else "medium" if affected_nodes else "low",
         }

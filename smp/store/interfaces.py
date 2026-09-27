@@ -239,6 +239,23 @@ class VectorStore(abc.ABC):
     async def delete_by_file(self, file_path: str) -> int:
         """Delete all vectors whose metadata ``file_path`` matches."""
 
+    @abc.abstractmethod
+    async def semantic_search(
+        self,
+        query: str,
+        top_k: int = 5,
+        where: dict[str, Any] | None = None,
+        instruction: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Semantic search over stored vectors using a text query.
+
+        Generates an embedding for *query* using the configured embedding
+        model and performs nearest-neighbour search.  Optional *where*
+        filter restricts results to vectors whose metadata match.
+
+        Returns the same dict structure as :meth:`query`.
+        """
+
     # -- Context manager convenience -----------------------------------------
 
     async def __aenter__(self) -> VectorStore:

@@ -42,9 +42,13 @@ chroma-data/
 
 # Type stubs
 *.pyi
-
+*.deb
 # Logs
 *.log
 
 # MyPy cache
 .mypy_cache/
+
+linux-master.zip
+
+Qwen3-Embedding-0.6B-GGUF/

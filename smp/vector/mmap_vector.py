@@ -122,6 +122,11 @@ class MMapVectorStore(VectorStore):
 
         self._lock = asyncio.Lock()
         self._connected = False
+        self._embedding_service: Any | None = None
+
+    def set_embedding_service(self, service: Any | None) -> None:
+        """Set the embedding service used for semantic search."""
+        self._embedding_service = service
 
     # -- Lifecycle -------------------------------------------------------------
 
@@ -346,6 +351,21 @@ class MMapVectorStore(VectorStore):
         top_k: int = 5,
         where: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
+        return await self.query(embedding=embedding, top_k=top_k, where=where)
+
+    # -- Semantic search ------------------------------------------------------
+
+    async def semantic_search(
+        self,
+        query: str,
+        top_k: int = 5,
+        where: dict[str, Any] | None = None,
+        instruction: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Generate embedding for *query* and perform top-k similarity search."""
+        if self._embedding_service is None:
+            raise RuntimeError("No embedding service configured. Call set_embedding_service() first.")
+        embedding = await self._embedding_service.embed_query(query, instruction=instruction)
         return await self.query(embedding=embedding, top_k=top_k, where=where)
 
     # -- Introspection ---------------------------------------------------------

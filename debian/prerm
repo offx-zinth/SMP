@@ -1,0 +1,18 @@
+#!/bin/sh
+set -e
+
+# Remove environment configuration
+if [ -f /etc/profile.d/smp.sh ]; then
+    rm -f /etc/profile.d/smp.sh
+fi
+
+# Clean up the model file
+if [ -f /usr/lib/smp/models/Qwen3-Embedding-0.6B-Q8_0.gguf ]; then
+    rm -f /usr/lib/smp/models/Qwen3-Embedding-0.6B-Q8_0.gguf
+fi
+
+# Clean up any leftover directories
+rmdir /usr/lib/smp/models 2>/dev/null || true
+rmdir /usr/lib/smp 2>/dev/null || true
+
+exit 0

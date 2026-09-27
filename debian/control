@@ -1,0 +1,30 @@
+Source: smp
+Section: devel
+Priority: optional
+Maintainer: SMP Team <team@smp.local>
+Build-Depends: debhelper-compat (= 13), python3 (>= 3.11), python3-setuptools, python3-wheel, python3-pip
+Standards-Version: 4.6.2
+Homepage: https://github.com/anomalyco/SMP
+Vcs-Git: https://github.com/anomalyco/SMP
+Vcs-Browser: https://github.com/anomalyco/SMP
+
+Package: smp
+Architecture: all
+Depends: ${python3:Depends}, ${misc:Depends}, python3 (>= 3.11), python3-msgspec (>= 0.19), python3-fastapi (>= 0.115), python3-uvicorn (>= 0.34), python3-mcp (>= 1.0), python3-httpx (>= 0.27), python3-tree-sitter (>= 0.24), python3-tree-sitter-python (>= 0.23), python3-tree-sitter-javascript (>= 0.21), python3-tree-sitter-typescript (>= 0.23), python3-tree-sitter-java (>= 0.23), python3-tree-sitter-c (>= 0.23), python3-tree-sitter-cpp (>= 0.23), python3-tree-sitter-c-sharp (>= 0.23), python3-tree-sitter-go (>= 0.23), python3-tree-sitter-rust (>= 0.23), python3-tree-sitter-php (>= 0.23), python3-tree-sitter-swift (>= 0.0.1), python3-tree-sitter-kotlin (>= 1.0), python3-tree-sitter-ruby (>= 0.23), python3-tree-sitter-matlab (>= 1.0), python3-dotenv (>= 1.0), python3-structlog (>= 24.0), python3-redis (>= 5.0), python3-watchdog (>= 4.0), python3-faiss-cpu (>= 1.7), python3-numpy (>= 1.26), python3-llama-cpp-python (>= 0.3)
+Recommends: python3-pytest (>= 8.0), python3-ruff (>= 0.8), python3-mypy (>= 1.13)
+Description: Structural Memory Protocol - Graph-based Codebase Intelligence for AI Agents
+ SMP (Structural Memory Protocol) is a graph-based codebase intelligence system
+ for AI agents. It parses source code (14 languages via tree-sitter) into a
+ knowledge graph stored in a memory-mapped journal, exposing a JSON-RPC API
+ via FastAPI and an MCP server over stdio for agents.
+ .
+ Features:
+  * Multi-language code parsing (Python, JavaScript, TypeScript, Java, C/C++,
+    C#, Go, Rust, PHP, Ruby, Swift, Kotlin, MATLAB)
+  * Graph-based code navigation and impact analysis
+  * Semantic search using Qwen3-Embedding-0.6B GGUF model (1024 dimensions)
+  * JSON-RPC API and MCP server for AI agent integration
+  * Session management with safety features (locks, checkpoints, rollback)
+  * Code review and PR handoff workflows
+  * Community detection for architecture analysis
+  * Graph integrity verification and backup/restore

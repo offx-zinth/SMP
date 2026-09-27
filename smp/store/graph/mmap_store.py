@@ -129,6 +129,7 @@ class MMapGraphStore(GraphStore):
         self._nodes: dict[str, GraphNode] = {}
         self._edges: dict[str, list[GraphEdge]] = {}
         self._edge_index: dict[str, list[GraphEdge]] = {}
+        self._nodes_by_file: dict[str, set[str]] = {}
 
         self._sessions: dict[str, dict[str, Any]] = {}
         self._locks: dict[str, dict[str, Any]] = {}
@@ -184,6 +185,7 @@ class MMapGraphStore(GraphStore):
         self._nodes.clear()
         self._edges.clear()
         self._edge_index.clear()
+        self._nodes_by_file.clear()
         self._sessions.clear()
         self._locks.clear()
         self._audit.clear()
@@ -382,12 +384,26 @@ class MMapGraphStore(GraphStore):
     # ------------------------------------------------------------------
 
     def _apply_node_upsert(self, node: GraphNode) -> None:
+        old = self._nodes.get(node.id)
+        if old is not None and old.file_path != node.file_path:
+            old_ids = self._nodes_by_file.get(old.file_path)
+            if old_ids is not None:
+                old_ids.discard(node.id)
+                if not old_ids:
+                    del self._nodes_by_file[old.file_path]
         self._nodes[node.id] = node
+        self._nodes_by_file.setdefault(node.file_path, set()).add(node.id)
 
     def _apply_node_delete(self, node_id: str) -> bool:
-        if node_id not in self._nodes:
+        node = self._nodes.get(node_id)
+        if node is None:
             return False
         del self._nodes[node_id]
+        file_ids = self._nodes_by_file.get(node.file_path)
+        if file_ids is not None:
+            file_ids.discard(node_id)
+            if not file_ids:
+                del self._nodes_by_file[node.file_path]
         if node_id in self._edges:
             del self._edges[node_id]
         for src, edges in list(self._edges.items()):
@@ -402,22 +418,46 @@ class MMapGraphStore(GraphStore):
         for i, current in enumerate(existing_out):
             if current.target_id == edge.target_id and current.type == edge.type:
                 existing_out[i] = edge
-                break
-        else:
-            existing_out.append(edge)
-        existing_in = self._edge_index.setdefault(edge.target_id, [])
-        for i, current in enumerate(existing_in):
-            if current.source_id == edge.source_id and current.type == edge.type:
-                existing_in[i] = edge
-                break
-        else:
-            existing_in.append(edge)
+                # Duplicate key: locate the mirror entry (rare path) so a
+                # metadata-carrying upsert stays consistent on both sides.
+                existing_in = self._edge_index.setdefault(edge.target_id, [])
+                for j, cur_in in enumerate(existing_in):
+                    if cur_in.source_id == edge.source_id and cur_in.type == edge.type:
+                        existing_in[j] = edge
+                        break
+                return
+        # New edge. The out/in structures are maintained as mirrors, so the
+        # in-list cannot already hold this key: append directly instead of
+        # scanning it. Hot hub targets (::printk:: etc.) otherwise cost
+        # O(in-degree) per new edge — O(degree²) per hub over an ingest.
+        existing_out.append(edge)
+        self._edge_index.setdefault(edge.target_id, []).append(edge)
 
     def _apply_file_delete(self, file_path: str) -> int:
-        to_delete = [nid for nid, n in self._nodes.items() if n.file_path == file_path]
-        for nid in to_delete:
-            self._apply_node_delete(nid)
-        return len(to_delete)
+        doomed = set(self._nodes_by_file.get(file_path) or ())
+        if not doomed:
+            return 0
+        # Single O(E) sweep: the previous per-node delete re-scanned both
+        # edge indexes for every node (O(nodes * E) — minutes for files
+        # with hundreds of symbols on kernel-scale graphs).
+        for nid in doomed:
+            self._nodes.pop(nid, None)
+        self._nodes_by_file.pop(file_path, None)
+        for src in list(self._edges):
+            if src in doomed:
+                del self._edges[src]
+            else:
+                kept = [e for e in self._edges[src] if e.target_id not in doomed]
+                if len(kept) != len(self._edges[src]):
+                    self._edges[src] = kept
+        for tgt in list(self._edge_index):
+            if tgt in doomed:
+                del self._edge_index[tgt]
+            else:
+                kept = [e for e in self._edge_index[tgt] if e.source_id not in doomed]
+                if len(kept) != len(self._edge_index[tgt]):
+                    self._edge_index[tgt] = kept
+        return len(doomed)
 
     # ------------------------------------------------------------------
     # Node CRUD (durable)
@@ -447,9 +487,10 @@ class MMapGraphStore(GraphStore):
         return True
 
     async def delete_nodes_by_file(self, file_path: str) -> int:
-        count = sum(1 for n in self._nodes.values() if n.file_path == file_path)
-        if count == 0:
+        file_ids = self._nodes_by_file.get(file_path)
+        if not file_ids:
             return 0
+        count = len(file_ids)
         self._apply_file_delete(file_path)
         self._append(RecordType.FILE_DELETE, encode(FileDeletePayload(file_path=file_path)))
         return count
@@ -464,7 +505,19 @@ class MMapGraphStore(GraphStore):
 
     async def upsert_edges(self, edges: Sequence[GraphEdge]) -> None:
         records: list[tuple[RecordType, bytes]] = []
+        # Within-batch dedup: parsers emit one candidate per call site, so a
+        # batch routinely repeats the same (source, target, type) key. Without
+        # this, each repeat took the duplicate path in _apply_edge_upsert and
+        # scanned the target's in-list — O(hub degree) per repeat, quadratic
+        # over hubs like ::printk:: (61% duplicates on real C corpora).
+        # First-wins matches upsert-replace semantics for identical payloads
+        # (parse/resolve batches carry no per-edge metadata differences).
+        seen: set[tuple[str, str, EdgeType]] = set()
         for edge in edges:
+            key = (edge.source_id, edge.target_id, edge.type)
+            if key in seen:
+                continue
+            seen.add(key)
             self._apply_edge_upsert(edge)
             records.append((RecordType.EDGE_UPSERT, encode(EdgeUpsertPayload(edge=edge))))
 
@@ -497,6 +550,14 @@ class MMapGraphStore(GraphStore):
         if edge_type:
             results = [e for e in results if e.type == edge_type]
         return results
+
+    async def get_node_degree(self, node_id: str) -> tuple[int, int]:
+        """Return ``(in_degree, out_degree)`` from the live edge indexes.
+
+        Both ``_edges`` (keyed by source) and ``_edge_index`` (keyed by
+        target) hold deduplicated edge lists, so lengths are exact degrees.
+        """
+        return len(self._edge_index.get(node_id, [])), len(self._edges.get(node_id, []))
 
     async def get_neighbors(
         self,
@@ -552,7 +613,7 @@ class MMapGraphStore(GraphStore):
                         neighbor_id = edge.source_id
                     else:
                         continue
-                
+
                 # Handle self-loops (recursive self-calls): include the node
                 # in results but don't re-queue it to avoid infinite loops
                 if neighbor_id == current_id:
@@ -560,7 +621,7 @@ class MMapGraphStore(GraphStore):
                         visited.add(neighbor_id)
                         results.append(self._nodes[neighbor_id])
                     continue
-                
+
                 if neighbor_id in visited:
                     continue
                 if neighbor_id in self._nodes:
@@ -639,12 +700,14 @@ class MMapGraphStore(GraphStore):
         for node in self._nodes.values():
             if node_types and node.type.value not in node_types:
                 continue
-            if tags:
-                if not any(tag in node.semantic.tags for tag in tags):
-                    continue
-            if scope and scope not in ("full", "full/"):
-                if not (node.id.startswith(scope) or node.file_path.startswith(scope)):
-                    continue
+            if tags and not any(tag in node.semantic.tags for tag in tags):
+                continue
+            if (
+                scope
+                and scope not in ("full", "full/")
+                and not (node.id.startswith(scope) or node.file_path.startswith(scope))
+            ):
+                continue
 
             score = 0
             name_lower = node.structural.name.lower()
@@ -707,9 +770,9 @@ class MMapGraphStore(GraphStore):
         """
         # Build multiple indices for faster lookup
         by_name: dict[str, list[str]] = {}  # structural.name -> [node_ids]
-        by_fq_name: dict[str, list[str]] = {}  # file_path::name -> [node_ids] 
+        by_fq_name: dict[str, list[str]] = {}  # file_path::name -> [node_ids]
         by_dotted_prefix: dict[str, list[str]] = {}  # prefix -> [node_ids] for dotted resolution
-        
+
         for node in self._nodes.values():
             if not node.structural.name:
                 continue
@@ -728,6 +791,12 @@ class MMapGraphStore(GraphStore):
                     mid_name = ".".join(parts[1:])
                     by_dotted_prefix.setdefault(mid_name, []).append(node.id)
 
+        # Pre-lowered index: first-inserted name wins for each lowercase key,
+        # exactly matching the linear case-insensitive scan this replaces.
+        by_name_lower: dict[str, list[str]] = {}
+        for name, node_ids in by_name.items():
+            by_name_lower.setdefault(name.lower(), node_ids)
+
         to_add: list[GraphEdge] = []
         for edges in self._edges.values():
             for edge in edges:
@@ -737,23 +806,23 @@ class MMapGraphStore(GraphStore):
                 placeholder_content = target.strip(":")
                 if not placeholder_content:
                     continue
-                    
+
                 # Try multiple resolution strategies in order of preference
                 matched_node_ids: set[str] = set()
-                
+
                 # Strategy 1: Exact FQ match (file_path::name)
                 if placeholder_content in by_fq_name:
                     matched_node_ids.update(by_fq_name[placeholder_content])
-                
+
                 # Strategy 2: Exact name match
                 if placeholder_content in by_name:
                     matched_node_ids.update(by_name[placeholder_content])
-                
+
                 # Strategy 3: Dotted name resolution (e.g., util.helper -> helper)
                 short_name = placeholder_content.split(".")[-1]
                 if short_name in by_dotted_prefix:
                     matched_node_ids.update(by_dotted_prefix[short_name])
-                
+
                 # Strategy 4: Try common prefixes (e.g., if placeholder is "java.util.Map.Entry", try "Map.Entry")
                 parts = placeholder_content.split(".")
                 if len(parts) > 1:
@@ -766,15 +835,11 @@ class MMapGraphStore(GraphStore):
                         last_two = ".".join(parts[-2:])
                         if last_two in by_name:
                             matched_node_ids.update(by_name[last_two])
-                
+
                 # Strategy 5: Case-insensitive fallback (last resort)
                 if not matched_node_ids:
-                    target_lower = placeholder_content.lower()
-                    for name, node_ids in by_name.items():
-                        if name.lower() == target_lower:
-                            matched_node_ids.update(node_ids)
-                            break
-                
+                    matched_node_ids.update(by_name_lower.get(placeholder_content.lower(), ()))
+
                 # Add all matched edges (deduplication handled by upsert_edges)
                 for node_id in matched_node_ids:
                     to_add.append(GraphEdge(source_id=edge.source_id, target_id=node_id, type=edge.type))
@@ -861,7 +926,7 @@ class MMapGraphStore(GraphStore):
         # Include multiple naming conventions to improve resolution success
         enhanced_name_to_id: dict[str, str] = {}  # best match for each name
         all_names: list[str] = []
-        
+
         for node in graph_nodes:
             if not node.structural.name:
                 continue
@@ -872,22 +937,28 @@ class MMapGraphStore(GraphStore):
             # Add dotted name variants
             parts = name.split(".")
             for i in range(len(parts)):
-                prefix = ".".join(parts[:i+1])
+                prefix = ".".join(parts[: i + 1])
                 suffix = ".".join(parts[i:])
                 enhanced_name_to_id[prefix] = node.id
                 enhanced_name_to_id[suffix] = node.id
                 # For short names, keep the most specific match
-                if i == len(parts) - 1:  # short name
-                    if suffix not in enhanced_name_to_id or len(suffix) < 30:  # prefer shorter names
-                        enhanced_name_to_id[suffix] = node.id
+                if i == len(parts) - 1 and (
+                    suffix not in enhanced_name_to_id or len(suffix) < 30
+                ):  # prefer shorter names
+                    enhanced_name_to_id[suffix] = node.id
 
         resolved: list[GraphEdge] = []
+        # First-inserted name wins per uppercase key — same order as the
+        # linear all_names scan this lookup replaces.
+        all_names_upper: dict[str, str] = {}
+        for _node_name in all_names:
+            all_names_upper.setdefault(_node_name.upper(), _node_name)
         for ec in parsed.edge_candidates:
             target_id = f"::{ec.target_name}::"
-            
+
             # Enhanced resolution strategies in order of preference
             matched_target_id = None
-            
+
             # Strategy 1: Try exact name match first
             if ec.target_name in enhanced_name_to_id:
                 matched_target_id = enhanced_name_to_id[ec.target_name]
@@ -902,14 +973,13 @@ class MMapGraphStore(GraphStore):
                 common_stdlib = ["Map", "List", "Set", "Collection", "Iterable", "Iterator"]
                 if ec.target_name in common_stdlib:
                     # Check if any node has matching name (case-insensitive for Java)
-                    for node_name in all_names:
-                        if node_name.upper() == ec.target_name.upper():
-                            matched_target_id = enhanced_name_to_id[node_name]
-                            break
-            
+                    _ci = all_names_upper.get(ec.target_name.upper())
+                    if _ci is not None:
+                        matched_target_id = enhanced_name_to_id[_ci]
+
             if matched_target_id:
                 target_id = matched_target_id
-            
+
             try:
                 edge_type = EdgeType(ec.edge_type)
             except ValueError:
@@ -928,7 +998,9 @@ class MMapGraphStore(GraphStore):
         if parsed.resolved_edges:
             await self.upsert_edges(parsed.resolved_edges)
 
-        self._parsed_files[file_path] = parsed
+        # Note: parsed is intentionally NOT retained on the instance — nothing
+        # reads it back, and keeping every ParsedFile would cost ~2-3GB on a
+        # full-kernel ingest. Only the content hash is needed for staleness.
         self._file_hashes[file_path] = parsed.content_hash
         status = ParseStatus(
             parsed=True,
@@ -1025,7 +1097,7 @@ class MMapGraphStore(GraphStore):
             return
         self._watcher.unwatch_directory(path)
 
-    async def invalidate_file(self, file_path: str) -> None:
+    async def invalidate_file(self, file_path: str, *, enqueue: bool = True) -> None:
         resolved = self._normalise_path(file_path)
         if not Path(resolved).exists():
             await self._handle_file_deleted(resolved)
@@ -1035,6 +1107,8 @@ class MMapGraphStore(GraphStore):
         if status is not None:
             status.stale = True
 
+        if not enqueue:
+            return
         scheduler = self._get_scheduler()
         scheduler.enqueue(resolved, priority=_INVALIDATE_PRIORITY)
         log.info("file_invalidated", path=resolved)

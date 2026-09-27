@@ -94,7 +94,12 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[None]:
     graph = MMapGraphStore(path=resolved_graph_path)
     await graph.connect()
 
-    vector_store = MMapVectorStore(path=settings.vector_path, dimension=128)
+    from smp.embedding.service import (
+        EMBEDDING_DIM,
+        get_embedding_service,  # noqa: F401
+    )
+
+    vector_store = MMapVectorStore(path=settings.vector_path, dimension=EMBEDDING_DIM)
     await vector_store.connect()
 
     engine = DefaultQueryEngine(graph_store=graph)

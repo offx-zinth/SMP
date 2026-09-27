@@ -1,0 +1,25 @@
+#!/bin/sh
+set -e
+
+# Set the model path for SMP
+export SMP_MODEL_PATH=/usr/lib/smp/models/Qwen3-Embedding-0.6B-Q8_0.gguf
+
+# Create symlink for backwards compatibility
+if [ ! -L /usr/lib/smp/Qwen3-Embedding-0.6B-GGUF ]; then
+    mkdir -p /usr/lib/smp
+fi
+
+# Update profile.d script with model path
+cat > /etc/profile.d/smp.sh << 'EOF'
+export SMP_MODEL_PATH=/usr/lib/smp/models/Qwen3-Embedding-0.6B-Q8_0.gguf
+EOF
+
+# Set environment for non-login shells
+if [ -f /etc/environment ]; then
+    grep -q "SMP_MODEL_PATH" /etc/environment || echo "SMP_MODEL_PATH=/usr/lib/smp/models/Qwen3-Embedding-0.6B-Q8_0.gguf" >> /etc/environment
+fi
+
+# Ensure the model file is accessible
+chmod 644 /usr/lib/smp/models/Qwen3-Embedding-0.6B-Q8_0.gguf
+
+exit 0

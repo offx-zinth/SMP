@@ -284,3 +284,94 @@ class TestQueryEngineSmoke:
 
         traced = await seeded_engine.trace("file.py::Function::func_a::4", depth=3)
         assert len(traced) > 0
+
+
+# ---------------------------------------------------------------------------
+# diff()
+# ---------------------------------------------------------------------------
+
+
+class TestDiff:
+    async def test_live_vs_live_is_empty(self, seeded_engine: DefaultQueryEngine) -> None:
+        result = await seeded_engine.diff("", "live", scope="full")
+        assert result["added"] == []
+        assert result["removed"] == []
+        assert result["changed"] == []
+        assert result["files_changed"] == []
+        assert "error" not in result
+
+    async def test_unknown_snapshot_errors(self, seeded_engine: DefaultQueryEngine) -> None:
+        result = await seeded_engine.diff("ckpt_nope", "live")
+        assert result["error"] == "snapshot_not_found"
+        assert result["missing_snapshot"] == "ckpt_nope"
+
+    async def test_checkpoint_vs_live_reports_nodes(
+        self, seeded_engine: DefaultQueryEngine, clean_graph: MMapGraphStore
+    ) -> None:
+        nodes = await clean_graph.find_nodes()
+        index = {n.id: n.content_hash() for n in nodes if n.file_path == "file.py"}
+        added_id = "file.py::Function::func_c::16"
+        changed_id = "file.py::Function::func_b::10"
+        del index[added_id]
+        index[changed_id] = "deadbeef"
+        await clean_graph.upsert_session(
+            {
+                "session_id": "ckpt_t1",
+                "kind": "checkpoint",
+                "checkpoint_id": "ckpt_t1",
+                "files": ["file.py"],
+                "fingerprints": {},
+                "node_index": {"file.py": index},
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+        result = await seeded_engine.diff("ckpt_t1", "live", scope="full")
+        assert result["files_changed"] == ["file.py"]
+        assert result["added"] == [added_id]
+        assert result["changed"] == [changed_id]
+        assert result["removed"] == []
+        assert result["node_detail"] == "full"
+        assert result["stats"]["added_count"] == 1
+        assert result["stats"]["changed_count"] == 1
+
+    async def test_legacy_checkpoint_is_file_level_only(
+        self, seeded_engine: DefaultQueryEngine, clean_graph: MMapGraphStore
+    ) -> None:
+        nodes = await clean_graph.find_nodes()
+        fps = [n.fingerprint() for n in nodes if n.file_path == "file.py"]
+        await clean_graph.upsert_session(
+            {
+                "session_id": "ckpt_legacy",
+                "kind": "checkpoint",
+                "checkpoint_id": "ckpt_legacy",
+                "files": ["file.py"],
+                "fingerprints": {"file.py": fps[:-1]},
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+        result = await seeded_engine.diff("ckpt_legacy", "live", scope="full")
+        assert result["files_changed"] == ["file.py"]
+        assert result["node_detail"] == "files_only"
+        assert result["added"] == []
+        assert result["removed"] == []
+        assert result["changed"] == []
+
+    async def test_scope_filters_files(self, seeded_engine: DefaultQueryEngine, clean_graph: MMapGraphStore) -> None:
+        nodes = await clean_graph.find_nodes()
+        index = {n.id: n.content_hash() for n in nodes if n.file_path == "file.py"}
+        del index["file.py::Function::func_c::16"]
+        await clean_graph.upsert_session(
+            {
+                "session_id": "ckpt_scope",
+                "kind": "checkpoint",
+                "checkpoint_id": "ckpt_scope",
+                "files": ["file.py"],
+                "fingerprints": {},
+                "node_index": {"file.py": index},
+                "created_at": "2026-01-01T00:00:00+00:00",
+            }
+        )
+        result = await seeded_engine.diff("ckpt_scope", "live", scope="nomatch/")
+        assert result["files_changed"] == []
+        assert result["removed"] == []
+        assert "error" not in result

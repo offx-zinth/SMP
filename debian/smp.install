@@ -1,0 +1,5 @@
+smp usr/lib/smp/models
+smp usr/lib/python3/dist-packages
+smp usr/bin/smp
+smp etc/profile.d/smp.sh
+smp lib/systemd/system/smp-server.service

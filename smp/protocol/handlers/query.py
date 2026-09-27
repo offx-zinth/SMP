@@ -18,6 +18,7 @@ from smp.core.models import (
     LocateParams,
     NavigateParams,
     SearchParams,
+    SemanticSearchParams,
     TraceParams,
 )
 from smp.logging import get_logger
@@ -79,6 +80,13 @@ async def search(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     p = msgspec.convert(params, SearchParams)
     engine = ctx["engine"]
     return await engine.search(p.query, p.match, p.filter, p.top_k)  # type: ignore[no-any-return]
+
+
+async def semantic_search(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/semantic_search``."""
+    p = msgspec.convert(params, SemanticSearchParams)
+    engine = ctx["engine"]
+    return await engine.semantic_search(p.query, p.top_k, p.where, p.instruction)  # type: ignore[no-any-return]
 
 
 async def flow(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
