@@ -104,6 +104,10 @@ _HANDLERS: dict[str, HandlerFn] = {
     "smp/impact": query_handlers.impact,
     "smp/locate": query_handlers.locate,
     "smp/search": query_handlers.search,
+    "smp/search_code": query_handlers.search_code,
+    "smp/file_outline": query_handlers.file_outline,
+    "smp/index_coverage": query_handlers.coverage,
+    "smp/dead_code": query_handlers.dead_code,
     "smp/semantic_search": query_handlers.semantic_search,
     "smp/flow": query_handlers.flow,
     # Memory management
@@ -115,6 +119,8 @@ _HANDLERS: dict[str, HandlerFn] = {
     "smp/plan": analysis_handlers.plan,
     "smp/conflict": analysis_handlers.conflict,
     "smp/why": analysis_handlers.why,
+    "smp/architecture": analysis_handlers.architecture,
+    "smp/coverage": sync_handlers.coverage,
     "smp/telemetry": analysis_handlers.telemetry,
     "smp/telemetry/hot": analysis_handlers.telemetry_hot,
     "smp/telemetry/node": analysis_handlers.telemetry_node,
@@ -146,6 +152,7 @@ _HANDLERS: dict[str, HandlerFn] = {
     "smp/sandbox/spawn": sandbox_handlers.sandbox_spawn,
     "smp/sandbox/execute": sandbox_handlers.sandbox_execute,
     "smp/sandbox/kill": sandbox_handlers.sandbox_kill,
+    "smp/sandbox/destroy": sandbox_handlers.sandbox_kill,
     # Community detection
     "smp/community/detect": community_handlers.community_detect,
     "smp/community/list": community_handlers.community_list,

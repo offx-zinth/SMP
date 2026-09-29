@@ -25,6 +25,8 @@ from smp.logging import get_logger
 
 log = get_logger(__name__)
 
+_HTTP_VERBS = {"get", "post", "put", "delete", "patch", "head", "options"}
+
 
 async def diff(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/diff``."""
@@ -165,7 +167,207 @@ async def telemetry_node(params: dict[str, Any], ctx: dict[str, Any]) -> dict[st
     }
 
 
+async def _is_test_path(file_path: str) -> bool:
+    """Return True for test/spec files (excluded from entry points)."""
+    lowered = (file_path or "").replace("\\", "/").lower()
+    segments = set(lowered.split("/"))
+    if segments & {"test", "tests", "spec", "__tests__"}:
+        return True
+    base = lowered.rsplit("/", 1)[-1]
+    return base.startswith("test_") or base.endswith(("_test.py", ".test.ts", ".spec.ts"))
+
+
+async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/architecture`` — one-call codebase overview.
+
+    Ports the codebase-memory ``get_architecture`` win: logical packages,
+    real entry points (tests excluded), languages, routes, hotspots,
+    layers, boundaries, file tree, and cohesive communities in a single
+    response so agents need not fan out to telemetry + community/*.
+    """
+    from smp.protocol.handlers.community import _detect_components
+
+    graph = ctx["graph"]
+    top_k = int(params.get("top_k", 10) or 10)
+    aspects = params.get("aspects") or ["all"]
+
+    nodes = await graph.find_nodes()
+    node_count = len(nodes)
+    edge_count = await graph.count_edges()
+
+    def want(name: str) -> bool:
+        return "all" in aspects or "overview" in aspects or name in aspects
+
+    # Logical packages: first meaningful path segment (smp, tests, benchmarks).
+    packages: dict[str, int] = {}
+    languages: dict[str, int] = {}
+    file_tree: dict[str, int] = {}
+    for node in nodes:
+        fp = (node.file_path or "").replace("\\", "/")
+        parts = [p for p in fp.split("/") if p not in ("", ".")]
+        pkg = parts[0] if len(parts) > 1 else "(root)"
+        # Drop absolute prefixes (/home, tmp) for readability.
+        if pkg in {"home", "tmp", "mnt"} and len(parts) > 2:
+            pkg = parts[2] if len(parts) > 3 else parts[-2]
+        packages[pkg] = packages.get(pkg, 0) + 1
+        ext = fp.rsplit(".", 1)[-1].lower() if "." in fp.rsplit("/", 1)[-1] else ""
+        lang = {
+            "py": "Python",
+            "js": "JavaScript",
+            "ts": "TypeScript",
+            "tsx": "TypeScript",
+            "java": "Java",
+            "go": "Go",
+            "rs": "Rust",
+            "rb": "Ruby",
+            "php": "PHP",
+            "c": "C",
+            "h": "C++",
+            "cpp": "C++",
+            "cs": "C#",
+            "swift": "Swift",
+            "kt": "Kotlin",
+            "m": "MATLAB",
+            "toml": "TOML",
+            "yaml": "YAML",
+            "yml": "YAML",
+            "md": "Markdown",
+        }.get(ext, ext or "unknown")
+        languages[lang] = languages.get(lang, 0) + 1
+        directory = "/".join(parts[:-1]) or "(root)"
+        file_tree[directory] = file_tree.get(directory, 0) + 1
+
+    scored: list[dict[str, Any]] = []
+    entry_points: list[dict[str, Any]] = []
+    routes: list[dict[str, Any]] = []
+    for node in nodes:
+        try:
+            in_deg, out_deg = await graph.get_node_degree(node.id)
+        except (NotImplementedError, AttributeError):
+            outs = await graph.get_edges(node.id, direction="outgoing")
+            ins = await graph.get_edges(node.id, direction="incoming")
+            out_deg, in_deg = len(outs), len(ins)
+        degree = in_deg + out_deg
+        scored.append(
+            {
+                "node_id": node.id,
+                "name": node.structural.name,
+                "file": node.file_path,
+                "type": node.type.value,
+                "in_degree": in_deg,
+                "out_degree": out_deg,
+                "degree": degree,
+            }
+        )
+        name_lower = (node.structural.name or "").lower()
+        is_test = _is_test_path(node.file_path) or name_lower.startswith("test_")
+        # Routes: HTTP verb decorators (@app.get, @router.post, @get ...).
+        for dec in node.semantic.decorators or []:
+            verb = dec.lstrip("@").split(".")[-1].split("(")[0].lower()
+            if verb in _HTTP_VERBS and not is_test:
+                routes.append(
+                    {
+                        "method": verb.upper(),
+                        "path": node.file_path,
+                        "handler": node.structural.name,
+                        "node_id": node.id,
+                    }
+                )
+        if is_test:
+            continue
+        # Real entry points: mains/CLIs, not every orphan function.
+        if (
+            node.type.value in ("Function", "Class")
+            and in_deg == 0
+            and out_deg > 0
+            and (
+                name_lower in {"main", "cli", "app", "serve", "run", "mcp"}
+                or node.file_path.endswith(("cli.py", "main.py", "__main__.py", "mcp.py", "server.py"))
+            )
+        ):
+            entry_points.append({"node_id": node.id, "name": node.structural.name, "file": node.file_path})
+    scored.sort(key=lambda d: d["degree"], reverse=True)
+    hotspots = scored[:top_k]
+    entry_points = entry_points[:top_k]
+    routes = routes[:top_k]
+
+    # Layers: entry (sources only) / core (sinks) / internal (isolated).
+    layers: list[dict[str, Any]] = []
+    for s in scored[: top_k * 2]:
+        if s["in_degree"] == 0 and s["out_degree"] > 0:
+            layer = "entry"
+        elif s["in_degree"] > 5 and s["out_degree"] == 0:
+            layer = "core"
+        elif s["in_degree"] == 0 and s["out_degree"] == 0:
+            layer = "internal"
+        else:
+            layer = "service"
+        layers.append({"name": s["name"], "layer": layer, "reason": f"in={s['in_degree']} out={s['out_degree']}"})
+
+    communities: list[dict[str, Any]] = []
+    matched = 0
+    try:
+        components, _, matched = await _detect_components(graph)
+        for cid, members in components.items():
+            # Cohesion: internal edges / possible edges (sampled via degrees).
+            internal = 0
+            top: list[str] = []
+            pkgs: dict[str, int] = {}
+            for mid in members[:20]:
+                top.append(mid)
+                for m in nodes:
+                    if m.id == mid:
+                        d = (m.file_path or "").replace("\\", "/").split("/")[0]
+                        pkgs[d] = pkgs.get(d, 0) + 1
+                        break
+            size = len(members)
+            cohesion = round(min(1.0, (internal + size) / max(1, size * 2)), 4) if size else 0.0
+            # Approximate cohesion from size: singletons 0, small clusters high.
+            cohesion = round(1.0 / max(1, size**0.5), 4) if size > 1 else 0.0
+            communities.append(
+                {
+                    "community_id": cid,
+                    "size": size,
+                    "cohesion": cohesion,
+                    "top_nodes": top[:5],
+                    "packages": sorted(pkgs.items(), key=lambda kv: -kv[1])[:3],
+                }
+            )
+        communities.sort(key=lambda c: int(c["size"]), reverse=True)
+        communities = communities[:top_k]
+    except Exception:  # noqa: BLE001
+        communities = []
+        matched = 0
+
+    result: dict[str, Any] = {"nodes": node_count, "edges": edge_count}
+    if want("packages") or want("structure"):
+        result["packages"] = sorted(packages.items(), key=lambda kv: -kv[1])[:top_k]
+    if want("languages"):
+        result["languages"] = sorted(languages.items(), key=lambda kv: -kv[1])
+    if want("entry_points"):
+        result["entry_points"] = entry_points
+    if want("hotspots"):
+        result["hotspots"] = hotspots
+    if want("routes"):
+        result["routes"] = routes
+    if want("layers"):
+        result["layers"] = layers[:top_k]
+    if want("clusters") or want("structure"):
+        result["communities"] = communities
+        result["clusters"] = communities
+    if want("file_tree"):
+        result["file_tree"] = sorted(file_tree.items(), key=lambda kv: -kv[1])[: top_k * 2]
+    # Back-compat keys always present.
+    result.setdefault("packages", sorted(packages.items(), key=lambda kv: -kv[1])[:top_k])
+    result.setdefault("entry_points", entry_points)
+    result.setdefault("hotspots", hotspots)
+    result.setdefault("communities", communities)
+    result["edges_matched"] = matched
+    return result
+
+
 __all__ = [
+    "architecture",
     "conflict",
     "diff",
     "plan",

@@ -43,8 +43,20 @@ async def trace(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/trace``."""
     p = msgspec.convert(params, TraceParams)
     engine = ctx["engine"]
-    result = await engine.trace(p.start, p.relationship, p.depth, p.direction)
-    return {"nodes": result}
+    result = await engine.trace(
+        p.start,
+        p.relationship,
+        p.depth,
+        p.direction,
+        include_tests=bool(params.get("include_tests", True)),
+        risk_labels=bool(params.get("risk_labels", params.get("risk", False))),
+        include_evidence=bool(params.get("include_evidence", False)),
+        max_nodes=int(params.get("max_nodes", params.get("limit", 100)) or 100),
+        offset=int(params.get("offset", 0) or 0),
+    )
+    total = len(result)
+    offset = int(params.get("offset", 0) or 0)
+    return {"nodes": result, "total": total, "offset": offset}
 
 
 async def context(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
@@ -71,15 +83,59 @@ async def locate(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/locate``."""
     p = msgspec.convert(params, LocateParams)
     engine = ctx["engine"]
-    result = await engine.locate(p.query, p.fields, p.node_types, p.top_k)
-    return {"matches": result}
+    offset = int(params.get("offset", params.get("result_offset", 0)) or 0)
+    match = str(params.get("match", "any"))
+    if params.get("paged") or params.get("has_more") is not None or "offset" in params:
+        return await engine.locate_paged(p.query, p.fields, p.node_types, p.top_k, offset, match)  # type: ignore[no-any-return]
+    result = await engine.locate(p.query, p.fields, p.node_types, p.top_k, offset, match)
+    return {"matches": result, "total": len(result), "offset": offset}
 
 
 async def search(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/search``."""
     p = msgspec.convert(params, SearchParams)
     engine = ctx["engine"]
-    return await engine.search(p.query, p.match, p.filter, p.top_k)  # type: ignore[no-any-return]
+    offset = int(params.get("offset", params.get("result_offset", 0)) or 0)
+    return await engine.search(p.query, p.match, p.filter, p.top_k, offset)  # type: ignore[no-any-return]
+
+
+async def search_code(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/search_code`` — compact / full / files modes."""
+    engine = ctx["engine"]
+    return await engine.search_code(  # type: ignore[no-any-return]
+        str(params.get("query", params.get("pattern", ""))),
+        str(params.get("mode", "compact")),
+        int(params.get("top_k", params.get("limit", 10)) or 10),
+        int(params.get("offset", params.get("result_offset", 0)) or 0),
+        str(params.get("match", "any")),
+        params.get("node_types"),
+    )
+
+
+async def file_outline(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/file_outline``."""
+    engine = ctx["engine"]
+    file_path = str(params.get("file_path", params.get("path", params.get("file", ""))))
+    return await engine.file_outline(  # type: ignore[no-any-return]
+        file_path,
+        int(params.get("limit", 200) or 200),
+        int(params.get("offset", 0) or 0),
+    )
+
+
+async def coverage(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/coverage`` — index coverage signal."""
+    engine = ctx["engine"]
+    return await engine.index_coverage(str(params.get("scope", "full")))  # type: ignore[no-any-return]
+
+
+async def dead_code(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/dead_code`` — zero-degree symbols."""
+    engine = ctx["engine"]
+    return await engine.dead_code(  # type: ignore[no-any-return]
+        int(params.get("top_k", 50) or 50),
+        bool(params.get("exclude_entry_points", True)),
+    )
 
 
 async def semantic_search(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:

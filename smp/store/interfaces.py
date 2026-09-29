@@ -139,8 +139,9 @@ class GraphStore(abc.ABC):
         tags: list[str] | None = None,
         scope: str | None = None,
         top_k: int = 5,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """Keyword search across docstrings, descriptions, and tags."""
+        """BM25 keyword search across names, docstrings, descriptions, and tags."""
         return []
 
     # -- Session Persistence ---------------------------------------------------

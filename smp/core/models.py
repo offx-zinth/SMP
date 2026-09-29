@@ -402,6 +402,11 @@ class TraceParams(msgspec.Struct):
     relationship: str = "CALLS"
     depth: int = 3
     direction: str = "outgoing"
+    include_tests: bool = True
+    risk_labels: bool = False
+    include_evidence: bool = False
+    max_nodes: int = 100
+    offset: int = 0
 
 
 class ContextParams(msgspec.Struct):
@@ -426,6 +431,8 @@ class LocateParams(msgspec.Struct):
     fields: list[str] = msgspec.field(default_factory=lambda: ["name", "docstring", "tags"])
     node_types: list[str] = msgspec.field(default_factory=list)
     top_k: int = 5
+    offset: int = 0
+    match: str = "any"
 
 
 class SearchParams(msgspec.Struct):
@@ -435,6 +442,26 @@ class SearchParams(msgspec.Struct):
     match: str = "any"
     filter: dict[str, Any] = msgspec.field(default_factory=dict)
     top_k: int = 5
+    offset: int = 0
+
+
+class SearchCodeParams(msgspec.Struct):
+    """Parameters for smp/search_code."""
+
+    query: str = ""
+    mode: str = "compact"
+    top_k: int = 10
+    offset: int = 0
+    match: str = "any"
+    node_types: list[str] = msgspec.field(default_factory=list)
+
+
+class FileOutlineParams(msgspec.Struct):
+    """Parameters for smp/file_outline."""
+
+    file_path: str = ""
+    limit: int = 200
+    offset: int = 0
 
 
 class SemanticSearchParams(msgspec.Struct):

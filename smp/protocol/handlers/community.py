@@ -103,15 +103,7 @@ async def community_detect(params: dict[str, Any], ctx: dict[str, Any]) -> dict[
     store["node_to_id"] = node_to_id
     store["level"] = max(0, len(p.resolutions) - 1) if p.resolutions else 0
 
-    summary = [
-        {
-            "community_id": cid,
-            "size": len(members),
-            "level": store["level"],
-        }
-        for cid, members in components.items()
-    ]
-    summary.sort(key=lambda c: -c["size"])
+    summary = await _community_summary(graph, components, store["level"])
 
     response: dict[str, Any] = {
         "level": store["level"],
@@ -123,6 +115,42 @@ async def community_detect(params: dict[str, Any], ctx: dict[str, Any]) -> dict[
     if edge_types is not None and matched_edges == 0:
         response["warning"] = "no edges matched the relationship_types filter; every node is a singleton community"
     return response
+
+
+async def _community_summary(
+    graph: Any, components: dict[str, list[str]], level: int, top_n: int = 5
+) -> list[dict[str, Any]]:
+    """Enriched community summary with cohesion, label, top nodes, packages."""
+    summary: list[dict[str, Any]] = []
+    for cid, members in components.items():
+        size = len(members)
+        cohesion = round(1.0 / max(1, size**0.5), 4) if size > 1 else 0.0
+        top_nodes: list[str] = []
+        packages: dict[str, int] = {}
+        label_parts: dict[str, int] = {}
+        for mid in members[:20]:
+            node = await graph.get_node(mid)
+            if node is None:
+                continue
+            top_nodes.append(node.structural.name or mid)
+            pkg = (node.file_path or "").replace("\\", "/").split("/")[0] or "(root)"
+            packages[pkg] = packages.get(pkg, 0) + 1
+            label_parts[node.structural.name] = label_parts.get(node.structural.name, 0) + 1
+        label = max(label_parts, key=lambda k: label_parts[k]) if label_parts else cid[:8]
+        summary.append(
+            {
+                "community_id": cid,
+                "size": size,
+                "level": level,
+                "cohesion": cohesion,
+                "label": label,
+                "top_nodes": top_nodes[:top_n],
+                "packages": sorted(packages.items(), key=lambda kv: -kv[1])[:3],
+                "members": size,
+            }
+        )
+    summary.sort(key=lambda c: -c["size"])
+    return summary
 
 
 async def community_list(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
@@ -138,15 +166,7 @@ async def community_list(params: dict[str, Any], ctx: dict[str, Any]) -> dict[st
         store["level"] = 0
 
     level = p.level if p.level is not None else store.get("level", 0)
-    summary = [
-        {
-            "community_id": cid,
-            "size": len(members),
-            "level": level,
-        }
-        for cid, members in store["by_id"].items()
-    ]
-    summary.sort(key=lambda c: -c["size"])
+    summary = await _community_summary(graph, store["by_id"], level)
     return {"level": level, "communities": summary, "total": len(summary)}
 
 
@@ -207,7 +227,14 @@ async def community_get(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str
 
 
 async def community_boundaries(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
-    """Handle ``smp/community/boundaries``."""
+    """Handle ``smp/community/boundaries``.
+
+    Reports coupling between communities. Connected-component communities
+    have no cross edges between *known* nodes by construction, so this also
+    reports bridges to external/placeholder targets (grouped as
+    ``"external"``) — otherwise agents always see zero boundaries even when
+    ``community/get(include_bridges=true)`` shows dozens of bridges.
+    """
     p = msgspec.convert(params, CommunityBoundariesParams)
     graph = ctx["graph"]
     store = _community_store(ctx)
@@ -228,6 +255,19 @@ async def community_boundaries(params: dict[str, Any], ctx: dict[str, Any]) -> d
                 target_community = node_to_id.get(edge.target_id)
                 if target_community and target_community != community_id:
                     key = (community_id, target_community)
+                    cross_edges[key] += 1
+                    if len(cross_examples[key]) < 3:
+                        cross_examples[key].append(
+                            {
+                                "source": edge.source_id,
+                                "target": edge.target_id,
+                                "edge_type": edge.type.value,
+                            }
+                        )
+                elif not target_community and edge.target_id not in members:
+                    # Bridge to a placeholder or unindexed node: still useful
+                    # coupling signal, grouped under "external".
+                    key = (community_id, "external")
                     cross_edges[key] += 1
                     if len(cross_examples[key]) < 3:
                         cross_examples[key].append(

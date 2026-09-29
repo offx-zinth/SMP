@@ -49,6 +49,7 @@ from smp.core.models import (
     SemanticProperties,
     StructuralProperties,
 )
+from smp.engine.bm25 import FIELD_WEIGHTS as _BM25_FIELD_WEIGHTS
 from smp.logging import get_logger
 from smp.store.graph.journal import Journal, JournalCorruptionError, RecordType
 from smp.store.graph.mmap_file import MMapFile
@@ -695,9 +696,13 @@ class MMapGraphStore(GraphStore):
         tags: list[str] | None = None,
         scope: str | None = None,
         top_k: int = 5,
+        offset: int = 0,
     ) -> list[dict[str, Any]]:
-        results: list[tuple[int, GraphNode]] = []
-        for node in self._nodes.values():
+        from smp.engine.bm25 import build_corpus, score_node, tokenize_query
+
+        nodes = list(self._nodes.values())
+        filtered: list[GraphNode] = []
+        for node in nodes:
             if node_types and node.type.value not in node_types:
                 continue
             if tags and not any(tag in node.semantic.tags for tag in tags):
@@ -708,41 +713,49 @@ class MMapGraphStore(GraphStore):
                 and not (node.id.startswith(scope) or node.file_path.startswith(scope))
             ):
                 continue
+            filtered.append(node)
 
-            score = 0
-            name_lower = node.structural.name.lower()
-            for term in query_terms:
-                term_lower = term.lower()
-                # Exact match gets the highest score
-                if name_lower == term_lower:
-                    score += 100
-                elif name_lower.startswith(term_lower):
-                    score += 40
-                elif term_lower in name_lower:
-                    score += 20
-                if term_lower in node.id.lower():
-                    score += 10
-                if term_lower in node.file_path.lower():
-                    score += 3
-                if node.semantic.docstring and term_lower in node.semantic.docstring.lower():
-                    score += 5
-                if node.semantic.description and term_lower in node.semantic.description.lower():
-                    score += 2
-                if any(term_lower in tag.lower() for tag in node.semantic.tags):
-                    score += 5
+        query = " ".join(query_terms)
+        terms = tokenize_query(query) or [t.lower() for t in query_terms if t]
+        if not terms:
+            return []
 
+        doc_fields, idf, avgdl = build_corpus(filtered)
+        scored: list[tuple[float, str, GraphNode]] = []
+        for node, fields in zip(filtered, doc_fields, strict=True):
+            hay_tokens: set[str] = set()
+            for toks in fields.values():
+                hay_tokens.update(toks)
+            present = [t for t in terms if t in hay_tokens or any(t in h for h in hay_tokens)]
+            if match == "all" and len(present) < len(terms):
+                continue
+            if not present:
+                continue
+            length = sum(len(toks) * _BM25_FIELD_WEIGHTS.get(f, 1.0) for f, toks in fields.items()) or 1.0
+            score, matched_on = score_node(terms, fields, idf, avgdl, length)
+            raw = query.lower()
+            if raw and (raw == node.structural.name.lower() or raw in node.id.lower()):
+                score += 20.0
             if score > 0:
-                results.append((score, node))
-        results.sort(key=lambda x: x[0], reverse=True)
+                scored.append((score, matched_on or "name", node))
+        scored.sort(key=lambda x: -x[0])
+        page = scored[offset : offset + top_k] if top_k > 0 else scored[offset:]
         return [
             {
                 "id": node.id,
                 "type": node.type.value,
                 "name": node.structural.name,
                 "file_path": node.file_path,
-                "score": score,
+                "score": round(score, 2),
+                "matched_on": matched_on,
+                "docstring": node.semantic.docstring,
+                "tags": list(node.semantic.tags),
+                "start_line": node.structural.start_line,
+                "end_line": node.structural.end_line,
+                "signature": node.structural.signature,
+                "lines": node.structural.lines,
             }
-            for score, node in results[:top_k]
+            for score, matched_on, node in page
         ]
 
     async def count_nodes(self) -> int:

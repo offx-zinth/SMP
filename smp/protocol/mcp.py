@@ -174,6 +174,10 @@ _EXPLICIT_TOOL_METHODS: set[str] = {
     "smp/impact",
     "smp/locate",
     "smp/search",
+    "smp/search_code",
+    "smp/file_outline",
+    "smp/coverage",
+    "smp/dead_code",
     "smp/flow",
     "smp/update",
     "smp/batch_update",
@@ -238,10 +242,29 @@ async def smp_navigate(query: str, include_relationships: bool = True, ctx: Any 
 
 @mcp.tool(description="Trace dependencies and references across the graph")
 async def smp_trace(
-    start: str, relationship: str = "CALLS", depth: int = 3, direction: str = "outgoing", ctx: Any = None
+    start: str,
+    relationship: str = "CALLS",
+    depth: int = 3,
+    direction: str = "outgoing",
+    include_tests: bool = True,
+    risk_labels: bool = False,
+    include_evidence: bool = False,
+    max_nodes: int = 100,
+    ctx: Any = None,
 ) -> str:
     result = await _call_rpc(
-        "smp/trace", {"start": start, "relationship": relationship, "depth": depth, "direction": direction}, ctx
+        "smp/trace",
+        {
+            "start": start,
+            "relationship": relationship,
+            "depth": depth,
+            "direction": direction,
+            "include_tests": include_tests,
+            "risk_labels": risk_labels,
+            "include_evidence": include_evidence,
+            "max_nodes": max_nodes,
+        },
+        ctx,
     )
     return _json.dumps(result, default=str, indent=2)
 
@@ -264,6 +287,8 @@ async def smp_locate(
     fields: list[str] | None = None,
     node_types: list[str] | None = None,
     top_k: int = 5,
+    offset: int = 0,
+    match: str = "any",
     ctx: Any = None,
 ) -> str:
     result = await _call_rpc(
@@ -273,6 +298,8 @@ async def smp_locate(
             "fields": fields or ["name", "docstring", "tags"],
             "node_types": node_types or [],
             "top_k": top_k,
+            "offset": offset,
+            "match": match,
         },
         ctx,
     )
@@ -280,9 +307,46 @@ async def smp_locate(
 
 
 @mcp.tool(description="Keyword search over names, docstrings, descriptions, and tags")
-async def smp_search(query: str, match: str = "any", filter: str = "{}", top_k: int = 5, ctx: Any = None) -> str:
+async def smp_search(
+    query: str,
+    match: str = "any",
+    filter: str = "{}",
+    top_k: int = 5,
+    offset: int = 0,
+    ctx: Any = None,
+) -> str:
     filter_dict = _json.loads(filter) if isinstance(filter, str) else {}
-    result = await _call_rpc("smp/search", {"query": query, "match": match, "filter": filter_dict, "top_k": top_k}, ctx)
+    result = await _call_rpc(
+        "smp/search", {"query": query, "match": match, "filter": filter_dict, "top_k": top_k, "offset": offset}, ctx
+    )
+    return _json.dumps(result, default=str, indent=2)
+
+
+@mcp.tool(description="Graph-ranked text search with compact/full/files modes and pagination")
+async def smp_search_code(
+    query: str, mode: str = "compact", top_k: int = 10, offset: int = 0, match: str = "any", ctx: Any = None
+) -> str:
+    result = await _call_rpc(
+        "smp/search_code", {"query": query, "mode": mode, "top_k": top_k, "offset": offset, "match": match}, ctx
+    )
+    return _json.dumps(result, default=str, indent=2)
+
+
+@mcp.tool(description="Declaration outline of one file with pagination")
+async def smp_file_outline(file_path: str, limit: int = 200, offset: int = 0, ctx: Any = None) -> str:
+    result = await _call_rpc("smp/file_outline", {"file_path": file_path, "limit": limit, "offset": offset}, ctx)
+    return _json.dumps(result, default=str, indent=2)
+
+
+@mcp.tool(description="Per-scope index coverage and freshness signal")
+async def smp_coverage(scope: str = "full", ctx: Any = None) -> str:
+    result = await _call_rpc("smp/index_coverage", {"scope": scope}, ctx)
+    return _json.dumps(result, default=str, indent=2)
+
+
+@mcp.tool(description="Zero-degree symbols for dead-code triage")
+async def smp_dead_code(top_k: int = 50, ctx: Any = None) -> str:
+    result = await _call_rpc("smp/dead_code", {"top_k": top_k}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
 
