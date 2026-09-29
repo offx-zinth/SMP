@@ -61,6 +61,23 @@ def _safe_json(value: Any, default: Any) -> Any:
     return value if value is not None else default
 
 
+def _safe_str_list(value: Any) -> list[str]:
+    """Parse a file-list arg: JSON array, single bare path, or blank.
+
+    Bridges send either ``'["a.py"]'`` or a bare ``'a.py'`` — both must
+    work, and ``""`` must yield ``[]`` instead of a char0 crash.
+    """
+    if isinstance(value, str):
+        if not value.strip():
+            return []
+        try:
+            parsed = _json.loads(value)
+        except _json.JSONDecodeError:
+            return [value]
+        return list(parsed) if isinstance(parsed, list) else [str(parsed)]
+    return list(value) if isinstance(value, list) else []
+
+
 # ---------------------------------------------------------------------------
 # Server state
 # ---------------------------------------------------------------------------
@@ -506,7 +523,7 @@ async def smp_dryrun(
 @mcp.tool(description="Create a recovery checkpoint")
 async def smp_checkpoint(session_id: str = "", files: str = "[]", ctx: Any = None) -> str:
 
-    file_list = _safe_json(files, [])
+    file_list = _safe_str_list(files)
     result = await _call_rpc("smp/checkpoint", {"session_id": session_id, "files": file_list}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -522,7 +539,7 @@ async def smp_lock(
     session_id: str = "", files: str = "[]", ttl_seconds: int = 300, force: bool = False, ctx: Any = None
 ) -> str:
 
-    file_list = _safe_json(files, [])
+    file_list = _safe_str_list(files)
     result = await _call_rpc(
         "smp/lock", {"session_id": session_id, "files": file_list, "ttl_seconds": ttl_seconds, "force": force}, ctx
     )
@@ -532,7 +549,7 @@ async def smp_lock(
 @mcp.tool(description="Unlock files")
 async def smp_unlock(session_id: str = "", files: str = "[]", ctx: Any = None) -> str:
 
-    file_list = _safe_json(files, [])
+    file_list = _safe_str_list(files)
     result = await _call_rpc("smp/unlock", {"session_id": session_id, "files": file_list}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -673,7 +690,14 @@ async def smp_sandbox_execute(
     sandbox_id: str = "", command: str = "[]", stdin: str | None = None, timeout: int | None = None, ctx: Any = None
 ) -> str:
 
-    cmd_list = _safe_json(command, [])
+    import shlex as _shlex
+
+    if isinstance(command, str):
+        cmd_list = _safe_json(command, None)
+        if cmd_list is None:
+            cmd_list = _shlex.split(command) if command.strip() else []
+    else:
+        cmd_list = list(command) if isinstance(command, list) else []
     result = await _call_rpc(
         "smp/sandbox/execute", {"sandbox_id": sandbox_id, "command": cmd_list, "stdin": stdin, "timeout": timeout}, ctx
     )
