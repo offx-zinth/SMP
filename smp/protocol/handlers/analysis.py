@@ -167,7 +167,7 @@ async def telemetry_node(params: dict[str, Any], ctx: dict[str, Any]) -> dict[st
     }
 
 
-async def _is_test_path(file_path: str) -> bool:
+def _is_test_path(file_path: str) -> bool:
     """Return True for test/spec files (excluded from entry points)."""
     lowered = (file_path or "").replace("\\", "/").lower()
     segments = set(lowered.split("/"))

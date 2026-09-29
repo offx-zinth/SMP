@@ -150,10 +150,13 @@ def _make_tool(method_name: str) -> None:
     async def tool_fn(params: str = "{}", ctx: Any = None) -> str:
         # NOTE: `method_name` is bound per `_make_tool()` call, so each
         # registered tool keeps its own method (no late-binding issue).
-        try:
-            parsed = _json.loads(params) if isinstance(params, str) else params
-        except _json.JSONDecodeError as exc:
-            return _json.dumps({"error": f"Invalid JSON params: {exc}"})
+        if isinstance(params, str) and not params.strip():
+            parsed: Any = {}
+        else:
+            try:
+                parsed = _json.loads(params) if isinstance(params, str) else params
+            except _json.JSONDecodeError as exc:
+                return _json.dumps({"error": f"Invalid JSON params: {exc}"})
 
         try:
             result = await _call_rpc(method_name, parsed, ctx)

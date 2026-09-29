@@ -120,9 +120,18 @@ class DefaultQueryEngine:
 
         # BM25 fallback for multi-term queries ("MMapGraphStore upsert").
         if not node and " " in query:
-            hits = await self.locate(query, top_k=1)
-            if hits:
-                node = await self._graph.get_node(hits[0]["id"])
+            # Prefer an exact token hit (usually the class/function name) over
+            # pure BM25 rank, which can prefer longer docstring matches.
+            for token in query.split():
+                candidate_id = await self._resolve_node_id(token)
+                if candidate_id is not None:
+                    node = await self._graph.get_node(candidate_id)
+                    if node is not None:
+                        break
+            if node is None:
+                hits = await self.locate(query, top_k=1)
+                if hits:
+                    node = await self._graph.get_node(hits[0]["id"])
 
         if not node:
             return {
