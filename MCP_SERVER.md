@@ -8,16 +8,20 @@ The Structural Memory Protocol (SMP) is now available as a **Model Context Proto
 
 The MCP server wraps SMP's JSON-RPC 2.0 API as MCP tools and resources, making all SMP capabilities accessible to Claude and other MCP-compatible AI agents.
 
-## Supported Tools (36 total)
+## Supported Tools (40 total)
 
-### Graph Intelligence (8 tools)
+### Graph Intelligence (12 tools)
 Query and navigate the code knowledge graph:
 - `smp_navigate` - Search for entities and their relationships
-- `smp_trace` - Trace dependencies and references across the graph
+- `smp_trace` - Trace dependencies and references across the graph (risk labels, evidence, `include_tests`)
 - `smp_context` - Extract surrounding context for a file
 - `smp_impact` - Assess the impact of changes
-- `smp_locate` - Find specific code entities
-- `smp_search` - Keyword search over names, docstrings, descriptions, tags, IDs, and file paths
+- `smp_locate` - Find specific code entities (BM25 + `matched_on` + pagination)
+- `smp_search` - BM25 over names, docstrings, descriptions, and tags (`any`/`all`, pagination)
+- `smp_search_code` - Graph-ranked text search with `compact`/`full`/`files` modes and pagination
+- `smp_file_outline` - Declaration outline of one file with pagination
+- `smp_coverage` - Per-scope index coverage and freshness signal
+- `smp_dead_code` - Zero-degree symbols for dead-code triage
 - `smp_flow` - Find paths or flows between entities
 - `smp_why` - Explain why relationships exist
 

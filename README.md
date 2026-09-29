@@ -37,6 +37,7 @@ SMP is a codebase intelligence server that models source code as a live, multi-d
   - [TypeScript SDK](#typescript-sdk)
   - [Full Agent Workflow](#full-agent-workflow)
 - [MCP Integration](#mcp-integration)
+- [Comparison: SMP vs codebase-memory-mcp](#comparison-smp-vs-codebase-memory-mcp)
 - [Technology Stack](#technology-stack)
 - [Project Structure](#project-structure)
 - [Contributing](#contributing)
@@ -308,19 +309,24 @@ relationship types (`smp/community/detect`). Results are cached server-side so `
 
 ---
 
-### 7. Locate — Keyword Search + Structural Expansion
+### 7. Locate — BM25 Search + Structural Expansion
 
-`smp/locate` is SMP's primary feature discovery endpoint. It scores every node against the query terms and
-returns the top matches with what each matched on (`name`, `docstring`, `tags`):
+`smp/locate` is SMP's primary feature discovery endpoint. It ranks every node with true Okapi BM25
+(`smp/engine/bm25.py`: `K1=1.2`, `B=0.75`, length normalisation) over field-weighted tokens —
+`name` 5.0, `tags` 3.0, `id` 2.0, `docstring` 2.0, `description`/`decorators` 1.5, `file_path`/`signature` 1.0 —
+with camelCase/snake_case tokenisation and an exact-name boost. Every match reports `matched_on` provenance
+plus `score`, `signature`, and `start_line`/`end_line`:
 
 ```
-smp/locate: all query terms in name → 100 · any term in name → 50 ·
-            all terms in docstring → 30 · any term → 15 · tag match → +10
-smp/search: name +3 · node id +3 · file path +1 · docstring +2 · description +1
+smp/search:  "graph store mmap" → MMapGraphStore 62.09 (name, id, file_path), total 1279
+smp/locate:  "upsert node"      → upsert_node 69.24, total 111
 ```
 
-`smp/search` adds `match` (`any`/`all`), `node_types` / `tags` / `scope` filters, and `top_k`. Both are plain
-scored keyword matching over the graph store — no BM25 index, no vector seeding, no PageRank.
+`smp/search` adds `match` (`any`/`all`, actually enforced), `node_types` / `tags` / `scope` filters, and
+`top_k`/`offset` pagination with `total` / `has_more` / `next_offset` metadata. `smp/search_code` adds
+`compact` / `full` (bounded snippets) / `files` modes; `smp/file_outline`, `smp/dead_code`, and
+`smp/index_coverage` round out discovery. No vector seeding, no PageRank — vectors remain strictly
+bring-your-own via `smp/vector/*`.
 
 ---
 
@@ -1007,6 +1013,36 @@ SMP is a native MCP server over stdio. Add it to your agent's MCP configuration 
 ```
 
 Once connected, your MCP-compatible IDE or agent (Cursor, Claude Code, Windsurf, etc.) will have access to all `smp/*` methods as first-class tools, with full structural memory for every code change.
+
+---
+
+## Comparison: SMP vs codebase-memory-mcp
+
+Independent agent-judged benchmark, both systems run live against this repo (SMP itself: SMP 3769 nodes /
+21944 edges vs codebase-memory 5722 nodes / 26251 edges — the gap is markdown `Section` nodes, which SMP's
+parser does not extract). Final score: **SMP 79 — codebase-memory 64**.
+
+| Dimension (0–10) | SMP | codebase-memory-mcp |
+|---|---|---|
+| Search precision | **9** — correct class first (`MMapGraphStore 62.09` + `matched_on`), true BM25 | 5 — BM25 top-5 all test files, real class rank 7 |
+| Recall / scale | 7 | **9** — 16 labels / 21 edge types |
+| Trace | **9** — callers + snippets, `fan_in`/`risk`/`evidence` | 4 — file-level only, errors on ambiguous names |
+| Architecture | **9** — repo-relative packages, 14 languages, clean URL routes, coupling boundaries | 5 — noisy routes (`/path/a`), basename-fragment packages |
+| Pagination / provenance | **9** — `total`/`has_more`/`next_offset` everywhere | 7 |
+| Outline / snippets | 8 | 8 |
+| Coverage honesty | 9 — explicit best-effort caveat | 8 — generation hash |
+| Ad-hoc graph queries | 0 — no Cypher (path-expression engine exists, not yet exposed) | **10** — Cypher `query_graph` + git-diff `detect_changes` |
+| Sessions / sandbox | **10** — open→lock (fencing)→sandbox→destroy round-trips live; exclusive | 0 — read-only by design |
+| Freshness | 9 — local `.smpg` you own | 8 — hosted index |
+
+**Verdict:** SMP wins for agent work (search, trace, architecture, and everything stateful). codebase-memory-mcp
+keeps two genuine credits: Cypher ad-hoc queries and git-diff impact mapping — plus raw index scale. Git
+diffing itself needs no graph tool (`git diff`, `gh`, editor views cover it); SMP's `smp/diff` + `smp/dryrun`
+cover the agent loop those can't: graph-aware blast radius before anything is written.
+
+**Credits:** SMP — true Okapi BM25, `matched_on` transparency, repo-relative architecture, only stateful
+primitives. codebase-memory-mcp — massive fresh index, deep `get_code_snippet` (66 members + 239 callers),
+Cypher, honest generation-hashed coverage.
 
 ---
 
