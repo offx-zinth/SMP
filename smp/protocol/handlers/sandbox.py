@@ -44,7 +44,16 @@ def _runtime(ctx: dict[str, Any]) -> SandboxRuntime:
 
 async def sandbox_spawn(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/sandbox/spawn`` — create a private working dir."""
-    p = msgspec.convert(params, SandboxSpawnParams)
+    import json as _json
+
+    normalized = dict(params)
+    files = normalized.get("files", {})
+    if isinstance(files, str):
+        try:
+            normalized["files"] = _json.loads(files) if files.strip() else {}
+        except Exception:  # noqa: BLE001
+            normalized["files"] = {}
+    p = msgspec.convert(normalized, SandboxSpawnParams)
     runtime = _runtime(ctx)
 
     handle = await runtime.spawn(

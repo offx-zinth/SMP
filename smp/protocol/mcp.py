@@ -42,6 +42,25 @@ from smp.vector.mmap_vector import MMapVectorStore
 
 log = get_logger(__name__)
 
+
+def _safe_json(value: Any, default: Any) -> Any:
+    """Parse a JSON-string arg, tolerating blanks passthroughs.
+
+    MCP bridges often send omitted list/dict args as ``""`` — plain
+    ``json.loads("")`` raises ``Expecting value (char 0)`` and breaks
+    session/sandbox flows. Return *default* for blank strings and on
+    any decode error instead of raising.
+    """
+    if isinstance(value, str):
+        if not value.strip():
+            return default
+        try:
+            return _json.loads(value)
+        except _json.JSONDecodeError:
+            return default
+    return value if value is not None else default
+
+
 # ---------------------------------------------------------------------------
 # Server state
 # ---------------------------------------------------------------------------
@@ -318,7 +337,7 @@ async def smp_search(
     offset: int = 0,
     ctx: Any = None,
 ) -> str:
-    filter_dict = _json.loads(filter) if isinstance(filter, str) else {}
+    filter_dict = _safe_json(filter, {})
     result = await _call_rpc(
         "smp/search", {"query": query, "match": match, "filter": filter_dict, "top_k": top_k, "offset": offset}, ctx
     )
@@ -375,7 +394,7 @@ async def smp_update(file_path: str, content: str = "", change_type: str = "modi
 @mcp.tool(description="Apply multiple file updates in batch")
 async def smp_batch_update(changes: str = "[]", ctx: Any = None) -> str:
 
-    parsed = _json.loads(changes) if isinstance(changes, str) else changes
+    parsed = _safe_json(changes, [])
     result = await _call_rpc("smp/batch_update", {"changes": parsed}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -415,7 +434,7 @@ async def smp_annotate(
     node_id: str, description: str = "", tags: str = "[]", force: bool = False, ctx: Any = None
 ) -> str:
 
-    tag_list = _json.loads(tags) if isinstance(tags, str) else tags
+    tag_list = _safe_json(tags, [])
     result = await _call_rpc(
         "smp/annotate", {"node_id": node_id, "description": description, "tags": tag_list, "force": force}, ctx
     )
@@ -425,7 +444,7 @@ async def smp_annotate(
 @mcp.tool(description="Bulk annotation of multiple nodes")
 async def smp_annotate_bulk(annotations: str = "[]", ctx: Any = None) -> str:
 
-    parsed = _json.loads(annotations) if isinstance(annotations, str) else annotations
+    parsed = _safe_json(annotations, [])
     result = await _call_rpc("smp/annotate/bulk", {"annotations": parsed}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -433,7 +452,7 @@ async def smp_annotate_bulk(annotations: str = "[]", ctx: Any = None) -> str:
 @mcp.tool(description="Add/remove/replace tags on nodes by scope")
 async def smp_tag(scope: str = "", tags: str = "[]", action: str = "add", ctx: Any = None) -> str:
 
-    tag_list = _json.loads(tags) if isinstance(tags, str) else tags
+    tag_list = _safe_json(tags, [])
     result = await _call_rpc("smp/tag", {"scope": scope, "tags": tag_list, "action": action}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -448,7 +467,7 @@ async def smp_session_open(
     agent_id: str = "", task: str = "", scope: str = "[]", mode: str = "read", ctx: Any = None
 ) -> str:
 
-    scope_list = _json.loads(scope) if isinstance(scope, str) else scope
+    scope_list = _safe_json(scope, [])
     result = await _call_rpc(
         "smp/session/open", {"agent_id": agent_id, "task": task, "scope": scope_list, "mode": mode}, ctx
     )
@@ -487,7 +506,7 @@ async def smp_dryrun(
 @mcp.tool(description="Create a recovery checkpoint")
 async def smp_checkpoint(session_id: str = "", files: str = "[]", ctx: Any = None) -> str:
 
-    file_list = _json.loads(files) if isinstance(files, str) else files
+    file_list = _safe_json(files, [])
     result = await _call_rpc("smp/checkpoint", {"session_id": session_id, "files": file_list}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -503,7 +522,7 @@ async def smp_lock(
     session_id: str = "", files: str = "[]", ttl_seconds: int = 300, force: bool = False, ctx: Any = None
 ) -> str:
 
-    file_list = _json.loads(files) if isinstance(files, str) else files
+    file_list = _safe_json(files, [])
     result = await _call_rpc(
         "smp/lock", {"session_id": session_id, "files": file_list, "ttl_seconds": ttl_seconds, "force": force}, ctx
     )
@@ -513,7 +532,7 @@ async def smp_lock(
 @mcp.tool(description="Unlock files")
 async def smp_unlock(session_id: str = "", files: str = "[]", ctx: Any = None) -> str:
 
-    file_list = _json.loads(files) if isinstance(files, str) else files
+    file_list = _safe_json(files, [])
     result = await _call_rpc("smp/unlock", {"session_id": session_id, "files": file_list}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -561,7 +580,7 @@ async def smp_plan(
 @mcp.tool(description="Check for conflicts in proposed changes")
 async def smp_conflict(entity: str = "", proposed_change: str = "", context: str = "{}", ctx: Any = None) -> str:
 
-    ctx_dict = _json.loads(context) if isinstance(context, str) else context
+    ctx_dict = _safe_json(context, {})
     result = await _call_rpc(
         "smp/conflict", {"entity": entity, "proposed_change": proposed_change, "context": ctx_dict}, ctx
     )
@@ -596,9 +615,9 @@ async def smp_review_create(
         "smp/review/create",
         {
             "session_id": session_id,
-            "files_changed": _json.loads(files_changed) if isinstance(files_changed, str) else files_changed,
+            "files_changed": _safe_json(files_changed, []),
             "diff_summary": diff_summary,
-            "reviewers": _json.loads(reviewers) if isinstance(reviewers, str) else reviewers,
+            "reviewers": _safe_json(reviewers, []),
         },
         ctx,
     )
@@ -644,7 +663,7 @@ async def smp_sandbox_spawn(
     name: str | None = None, template: str | None = None, files: str = "{}", ctx: Any = None
 ) -> str:
 
-    files_dict = _json.loads(files) if isinstance(files, str) else files
+    files_dict = _safe_json(files, {})
     result = await _call_rpc("smp/sandbox/spawn", {"name": name, "template": template, "files": files_dict}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -654,7 +673,7 @@ async def smp_sandbox_execute(
     sandbox_id: str = "", command: str = "[]", stdin: str | None = None, timeout: int | None = None, ctx: Any = None
 ) -> str:
 
-    cmd_list = _json.loads(command) if isinstance(command, str) else command
+    cmd_list = _safe_json(command, [])
     result = await _call_rpc(
         "smp/sandbox/execute", {"sandbox_id": sandbox_id, "command": cmd_list, "stdin": stdin, "timeout": timeout}, ctx
     )
@@ -678,10 +697,8 @@ async def smp_community_detect(resolutions: str = "[]", relationship_types: str 
     result = await _call_rpc(
         "smp/community/detect",
         {
-            "resolutions": _json.loads(resolutions) if isinstance(resolutions, str) else resolutions,
-            "relationship_types": _json.loads(relationship_types)
-            if isinstance(relationship_types, str)
-            else relationship_types,
+            "resolutions": _safe_json(resolutions, []),
+            "relationship_types": _safe_json(relationship_types, []),
         },
         ctx,
     )
@@ -703,7 +720,7 @@ async def smp_community_get(
         "smp/community/get",
         {
             "community_id": community_id,
-            "node_types": _json.loads(node_types) if isinstance(node_types, str) else node_types,
+            "node_types": _safe_json(node_types, []),
             "include_bridges": include_bridges,
         },
         ctx,
@@ -725,7 +742,7 @@ async def smp_community_boundaries(level: int = 0, min_coupling: float = 0.05, c
 @mcp.tool(description="Sync with a remote graph snapshot")
 async def smp_sync(remote_data: str = "{}", ctx: Any = None) -> str:
 
-    parsed = _json.loads(remote_data) if isinstance(remote_data, str) else remote_data
+    parsed = _safe_json(remote_data, {})
     result = await _call_rpc("smp/sync", {"remote_data": parsed}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -733,7 +750,7 @@ async def smp_sync(remote_data: str = "{}", ctx: Any = None) -> str:
 @mcp.tool(description="Bulk-import nodes and edges from serialised data")
 async def smp_index_import(data: str = "{}", ctx: Any = None) -> str:
 
-    parsed = _json.loads(data) if isinstance(data, str) else data
+    parsed = _safe_json(data, {})
     result = await _call_rpc("smp/index/import", {"data": parsed}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -741,7 +758,7 @@ async def smp_index_import(data: str = "{}", ctx: Any = None) -> str:
 @mcp.tool(description="Verify node integrity against a stored signature")
 async def smp_integrity_check(node_id: str = "", current_state: str = "{}", ctx: Any = None) -> str:
 
-    state = _json.loads(current_state) if isinstance(current_state, str) else current_state
+    state = _safe_json(current_state, {})
     result = await _call_rpc("smp/integrity/check", {"node_id": node_id, "current_state": state}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -749,7 +766,7 @@ async def smp_integrity_check(node_id: str = "", current_state: str = "{}", ctx:
 @mcp.tool(description="Store a baseline signature for a node")
 async def smp_integrity_baseline(node_id: str = "", state: str = "{}", ctx: Any = None) -> str:
 
-    state_dict = _json.loads(state) if isinstance(state, str) else state
+    state_dict = _safe_json(state, {})
     result = await _call_rpc("smp/integrity/baseline", {"node_id": node_id, "state": state_dict}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -757,8 +774,8 @@ async def smp_integrity_baseline(node_id: str = "", state: str = "{}", ctx: Any 
 @mcp.tool(description="Vector similarity search")
 async def smp_vector_search(embedding: str = "[]", top_k: int = 5, where: str = "{}", ctx: Any = None) -> str:
 
-    emb = _json.loads(embedding) if isinstance(embedding, str) else embedding
-    wh = _json.loads(where) if isinstance(where, str) else where
+    emb = _safe_json(embedding, [])
+    wh = _safe_json(where, {})
     result = await _call_rpc("smp/vector/search", {"embedding": emb, "top_k": top_k, "where": wh}, ctx)
     return _json.dumps(result, default=str, indent=2)
 
@@ -771,10 +788,10 @@ async def smp_vector_upsert(
     result = await _call_rpc(
         "smp/vector/upsert",
         {
-            "ids": _json.loads(ids) if isinstance(ids, str) else ids,
-            "embeddings": _json.loads(embeddings) if isinstance(embeddings, str) else embeddings,
-            "metadatas": _json.loads(metadatas) if isinstance(metadatas, str) else metadatas,
-            "documents": _json.loads(documents) if isinstance(documents, str) else documents,
+            "ids": _safe_json(ids, []),
+            "embeddings": _safe_json(embeddings, []),
+            "metadatas": _safe_json(metadatas, []),
+            "documents": _safe_json(documents, []),
         },
         ctx,
     )
@@ -784,7 +801,7 @@ async def smp_vector_upsert(
 @mcp.tool(description="Delete vectors by ID")
 async def smp_vector_delete(ids: str = "[]", ctx: Any = None) -> str:
 
-    id_list = _json.loads(ids) if isinstance(ids, str) else ids
+    id_list = _safe_json(ids, [])
     result = await _call_rpc("smp/vector/delete", {"ids": id_list}, ctx)
     return _json.dumps(result, default=str, indent=2)
 

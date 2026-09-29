@@ -391,7 +391,16 @@ async def lock(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     * ``force=True`` steals an active lease (audit-logged); useful for
       operator recovery when the original holder is known to be gone.
     """
-    p = msgspec.convert(params, LockParams)
+    import json as _json
+
+    normalized = dict(params)
+    files = normalized.get("files", [])
+    if isinstance(files, str):
+        try:
+            normalized["files"] = _json.loads(files) if files.strip() else []
+        except Exception:  # noqa: BLE001
+            normalized["files"] = [files] if files else []
+    p = msgspec.convert(normalized, LockParams)
     graph = ctx["graph"]
     ttl = timedelta(seconds=max(1, int(p.ttl_seconds or 300)))
     now = _now()
@@ -476,7 +485,16 @@ async def lock(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
 
 async def unlock(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/unlock`` — release locks for files."""
-    p = msgspec.convert(params, LockParams)
+    import json as _json
+
+    normalized = dict(params)
+    files = normalized.get("files", [])
+    if isinstance(files, str):
+        try:
+            normalized["files"] = _json.loads(files) if files.strip() else []
+        except Exception:  # noqa: BLE001
+            normalized["files"] = [files] if files else []
+    p = msgspec.convert(normalized, LockParams)
     graph = ctx["graph"]
 
     released: list[str] = []
