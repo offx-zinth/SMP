@@ -303,6 +303,18 @@ class SandboxRuntime:
     async def destroy(self, sandbox_id: str) -> bool:
         handle = self._sandboxes.pop(sandbox_id, None)
         if handle is None:
+            handle = self._reattach(sandbox_id)
+            if handle is not None:
+                self._sandboxes.pop(sandbox_id, None)
+        if handle is None:
+            # Dir without handle (e.g. reattach raced a restart): remove it.
+            root = self._root / sandbox_id
+            try:
+                if sandbox_id.startswith("sbx_") and root.is_dir():
+                    await asyncio.to_thread(shutil.rmtree, root, ignore_errors=True)
+                    return True
+            except OSError:
+                return False
             return False
         handle.closed = True
         await asyncio.to_thread(shutil.rmtree, handle.root, ignore_errors=True)
