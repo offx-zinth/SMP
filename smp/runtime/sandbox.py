@@ -130,7 +130,10 @@ class SandboxRuntime:
             return handle
 
     def get(self, sandbox_id: str) -> SandboxHandle | None:
-        return self._sandboxes.get(sandbox_id)
+        handle = self._sandboxes.get(sandbox_id)
+        if handle is None:
+            handle = self._reattach(sandbox_id)
+        return handle
 
     async def execute(
         self,
@@ -142,6 +145,8 @@ class SandboxRuntime:
         env: dict[str, str] | None = None,
     ) -> ExecutionResult:
         handle = self._sandboxes.get(sandbox_id)
+        if handle is None:
+            handle = self._reattach(sandbox_id)
         if handle is None or handle.closed:
             raise KeyError(sandbox_id)
 
@@ -243,6 +248,36 @@ class SandboxRuntime:
             duration_ms=int(result.duration_ms),
         )
         return result
+
+    def _reattach(self, sandbox_id: str) -> SandboxHandle | None:
+        """Re-register a sandbox whose dir survived a daemon restart.
+
+        Handles live in process memory, but roots live on disk under
+        ``self._root``.  Bridges that route each tool call to a fresh
+        daemon would otherwise see ``sandbox_not_found`` for every
+        spawn→execute pair.  Reattach is strict: id must match
+        ``sbx_<hex>`` and the directory must exist.
+        """
+        if not sandbox_id.startswith("sbx_"):
+            return None
+        root = self._root / sandbox_id
+        try:
+            if not root.is_dir():
+                return None
+            files = [p.name for p in root.iterdir()]
+        except OSError:
+            return None
+        handle = SandboxHandle(
+            sandbox_id=sandbox_id,
+            name=sandbox_id,
+            template="",
+            root=root,
+            created_at=_now_iso(),
+            files=files,
+        )
+        self._sandboxes[sandbox_id] = handle
+        log.info("sandbox_reattached", sandbox_id=sandbox_id)
+        return handle
 
     async def kill(self, execution_id: str) -> bool:
         """Terminate the execution if running, mark it killed otherwise.
