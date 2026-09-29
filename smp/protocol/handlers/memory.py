@@ -96,7 +96,7 @@ async def update(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         return {
             "file_path": file_path,
             "nodes": len(nodes),
-            "edges": 0,
+            "edges": await _count_file_edges(graph, nodes),
             "errors": 0,
             "stale_marked": stale_marked,
         }
@@ -115,7 +115,7 @@ async def update(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         return {
             "file_path": file_path,
             "nodes": len(nodes),
-            "edges": 0,
+            "edges": await _count_file_edges(graph, nodes),
             "errors": 0,
             "stale_marked": stale_marked,
         }
@@ -127,6 +127,21 @@ async def update(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         "errors": 0,
         "message": "graph store does not support live parsing",
     }
+
+
+async def _count_file_edges(graph: Any, nodes: list[Any]) -> int:
+    """Count in/out edges for *nodes* so smp/update reports real edge churn."""
+    total = 0
+    for node in nodes:
+        node_id = getattr(node, "id", "")
+        if not node_id:
+            continue
+        try:
+            edges = await graph.get_edges(node_id, direction="both")
+        except Exception:  # noqa: BLE001
+            continue
+        total += len(edges)
+    return total
 
 
 def _stale_copy(node: Any) -> Any | None:

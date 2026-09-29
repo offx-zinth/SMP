@@ -278,7 +278,59 @@ async def integrity_baseline(params: dict[str, Any], ctx: dict[str, Any]) -> dic
     }
 
 
+async def coverage(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/coverage`` — per-path index coverage and freshness.
+
+    Mirrors the codebase-memory ``check_index_coverage`` win: for each
+    requested path report whether the graph has nodes, parse status, and
+    what the agent should do next. Never claims completeness — paths with
+    no record are reported explicitly.
+    """
+    import time
+
+    graph = ctx["graph"]
+    paths = params.get("paths") or params.get("files") or []
+    if isinstance(paths, str):
+        paths = [paths]
+
+    results: list[dict[str, Any]] = []
+    for requested in paths:
+        nodes = await graph.find_nodes()
+        matched = [n for n in nodes if requested in n.file_path or n.file_path.endswith(requested)]
+        status = "no_recorded_issue" if matched else "not_indexed"
+        parse_status = "unknown"
+        if matched and hasattr(graph, "get_parse_status"):
+            try:
+                ps = await graph.get_parse_status(matched[0].file_path)
+                parse_status = "parsed" if ps.parsed else "unparsed"
+            except Exception:  # noqa: BLE001
+                parse_status = "unknown"
+        results.append(
+            {
+                "requested_path": requested,
+                "status": status,
+                "parse_status": parse_status,
+                "nodes": len(matched),
+                "recommended_action": "use_graph_with_best_effort_caveat" if matched else "ingest_or_update_path_first",
+            }
+        )
+    try:
+        total_nodes = await graph.count_nodes()
+        total_edges = await graph.count_edges()
+    except Exception:  # noqa: BLE001
+        total_nodes, total_edges = 0, 0
+    return {
+        "signal": "best_effort",
+        "indexed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "nodes": total_nodes,
+        "edges": total_edges,
+        "paths": results,
+        "caveat": "Best-effort signal only. No recorded issue does not prove completeness; read flagged source.",
+    }
+
+
 __all__ = [
+    "coverage",
     "index_import",
     "integrity_baseline",
     "integrity_check",
