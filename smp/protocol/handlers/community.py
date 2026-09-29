@@ -133,7 +133,13 @@ async def _community_summary(
             if node is None:
                 continue
             top_nodes.append(node.structural.name or mid)
-            pkg = (node.file_path or "").replace("\\", "/").split("/")[0] or "(root)"
+            fp = (node.file_path or "").replace("\\", "/")
+            segs = [p for p in fp.split("/") if p]
+            if "SMP" in segs:
+                idx = len(segs) - 1 - segs[::-1].index("SMP")
+                pkg = segs[idx + 1] if idx + 1 < len(segs) else "(root)"
+            else:
+                pkg = segs[-2] if len(segs) > 1 else (segs[0] if segs else "(root)")
             packages[pkg] = packages.get(pkg, 0) + 1
             label_parts[node.structural.name] = label_parts.get(node.structural.name, 0) + 1
         label = max(label_parts, key=lambda k: label_parts[k]) if label_parts else cid[:8]

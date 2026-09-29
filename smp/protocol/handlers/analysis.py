@@ -198,17 +198,20 @@ async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
     def want(name: str) -> bool:
         return "all" in aspects or "overview" in aspects or name in aspects
 
-    # Logical packages: first meaningful path segment (smp, tests, benchmarks).
+    # Logical packages: segment after the repo root (smp, tests, benchmarks).
     packages: dict[str, int] = {}
     languages: dict[str, int] = {}
     file_tree: dict[str, int] = {}
     for node in nodes:
         fp = (node.file_path or "").replace("\\", "/")
         parts = [p for p in fp.split("/") if p not in ("", ".")]
-        pkg = parts[0] if len(parts) > 1 else "(root)"
-        # Drop absolute prefixes (/home, tmp) for readability.
-        if pkg in {"home", "tmp", "mnt"} and len(parts) > 2:
-            pkg = parts[2] if len(parts) > 3 else parts[-2]
+        pkg = "(root)"
+        if "SMP" in parts:
+            idx = len(parts) - 1 - parts[::-1].index("SMP")
+            pkg = parts[idx + 1] if idx + 1 < len(parts) else "(root)"
+            # test_realworld/foo.py -> test_realworld; smp/engine/q.py -> smp.
+        elif parts:
+            pkg = parts[0] if len(parts) == 1 else parts[-2]
         packages[pkg] = packages.get(pkg, 0) + 1
         ext = fp.rsplit(".", 1)[-1].lower() if "." in fp.rsplit("/", 1)[-1] else ""
         lang = {
@@ -317,7 +320,13 @@ async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
                 top.append(mid)
                 for m in nodes:
                     if m.id == mid:
-                        d = (m.file_path or "").replace("\\", "/").split("/")[0]
+                        fpp = (m.file_path or "").replace("\\", "/")
+                        segs = [p for p in fpp.split("/") if p]
+                        if "SMP" in segs:
+                            idx = len(segs) - 1 - segs[::-1].index("SMP")
+                            d = segs[idx + 1] if idx + 1 < len(segs) else "(root)"
+                        else:
+                            d = segs[-2] if len(segs) > 1 else (segs[0] if segs else "(root)")
                         pkgs[d] = pkgs.get(d, 0) + 1
                         break
             size = len(members)
