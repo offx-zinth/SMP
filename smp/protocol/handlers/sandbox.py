@@ -66,7 +66,18 @@ async def sandbox_spawn(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str
 
 async def sandbox_execute(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/sandbox/execute`` — run a command and capture output."""
-    p = msgspec.convert(params, SandboxExecuteParams)
+    import json as _json
+    import shlex
+
+    normalized = dict(params)
+    cmd = normalized.get("command", [])
+    if isinstance(cmd, str):
+        try:
+            parsed = _json.loads(cmd) if cmd.strip().startswith("[") else shlex.split(cmd)
+            normalized["command"] = parsed if isinstance(parsed, list) else [str(parsed)]
+        except Exception:  # noqa: BLE001
+            normalized["command"] = shlex.split(cmd) if cmd.strip() else []
+    p = msgspec.convert(normalized, SandboxExecuteParams)
     runtime = _runtime(ctx)
 
     if runtime.get(p.sandbox_id) is None:
@@ -127,14 +138,30 @@ async def sandbox_execute(params: dict[str, Any], ctx: dict[str, Any]) -> dict[s
 
 
 async def sandbox_kill(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
-    """Handle ``smp/sandbox/kill`` — terminate a running execution."""
-    p = msgspec.convert(params, SandboxKillParams)
+    """Handle ``smp/sandbox/kill`` — terminate an execution or destroy a sandbox.
+
+    Accepts either an ``execution_id`` (``exec_*``, kills that run) or a
+    ``sandbox_id`` (``sbx_*``, destroys the whole sandbox). Older docs named
+    a ``sandbox_id`` field, so ``sandbox_id`` is accepted as an alias for
+    ``execution_id``. ``smp/sandbox/destroy`` is registered as an alias.
+    """
+    raw = dict(params)
+    # Back-compat: docs/clients send {"sandbox_id": ...} or {"execution_id": ...}.
+    target = raw.get("execution_id") or raw.get("sandbox_id") or ""
+    try:
+        p = msgspec.convert({"execution_id": str(target)}, SandboxKillParams)
+    except Exception:  # noqa: BLE001
+        return {"execution_id": str(target), "killed": False, "error": "invalid_id"}
     runtime = _runtime(ctx)
 
     killed = await runtime.kill(p.execution_id)
-    if not killed:
-        return {"execution_id": p.execution_id, "killed": False, "error": "execution_not_found"}
-    return {"execution_id": p.execution_id, "killed": True, "status": "killed"}
+    if killed:
+        return {"execution_id": p.execution_id, "killed": True, "status": "killed"}
+    # Fall back: treat the id as a sandbox id and destroy it.
+    destroyed = await runtime.destroy(p.execution_id)
+    if destroyed:
+        return {"execution_id": p.execution_id, "killed": True, "status": "destroyed"}
+    return {"execution_id": p.execution_id, "killed": False, "error": "execution_not_found"}
 
 
 __all__ = ["sandbox_execute", "sandbox_kill", "sandbox_spawn"]

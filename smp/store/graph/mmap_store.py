@@ -924,6 +924,7 @@ class MMapGraphStore(GraphStore):
                     ),
                     semantic=SemanticProperties(
                         docstring=pnode.docstring,
+                        decorators=list(getattr(pnode, "decorators", []) or []),
                     ),
                 )
             )

@@ -307,6 +307,31 @@ async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
             layer = "service"
         layers.append({"name": s["name"], "layer": layer, "reason": f"in={s['in_degree']} out={s['out_degree']}"})
 
+    # Boundaries: package-level coupling (from -> to call counts).
+    def _pkg_of(fp: str) -> str:
+        segs = [p for p in (fp or "").replace("\\", "/").split("/") if p]
+        if "SMP" in segs:
+            idx = len(segs) - 1 - segs[::-1].index("SMP")
+            return segs[idx + 1] if idx + 1 < len(segs) else "(root)"
+        return segs[-2] if len(segs) > 1 else (segs[0] if segs else "(root)")
+
+    id_to_pkg = {n.id: _pkg_of(n.file_path) for n in nodes}
+    coupling: dict[tuple[str, str], int] = {}
+    for n in nodes[:2000]:
+        try:
+            outs = await graph.get_edges(n.id, direction="outgoing")
+        except (NotImplementedError, AttributeError):
+            continue
+        src_pkg = id_to_pkg.get(n.id, "(root)")
+        for e in outs:
+            dst_pkg = id_to_pkg.get(e.target_id, "external")
+            if dst_pkg != src_pkg:
+                key = (src_pkg, dst_pkg)
+                coupling[key] = coupling.get(key, 0) + 1
+    boundaries = [
+        {"from": a, "to": b, "calls": c} for (a, b), c in sorted(coupling.items(), key=lambda kv: -kv[1])[:top_k]
+    ]
+
     communities: list[dict[str, Any]] = []
     matched = 0
     try:
@@ -361,6 +386,8 @@ async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
         result["routes"] = routes
     if want("layers"):
         result["layers"] = layers[:top_k]
+    if want("boundaries"):
+        result["boundaries"] = boundaries
     if want("clusters") or want("structure"):
         result["communities"] = communities
         result["clusters"] = communities
@@ -371,6 +398,7 @@ async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
     result.setdefault("entry_points", entry_points)
     result.setdefault("hotspots", hotspots)
     result.setdefault("communities", communities)
+    result.setdefault("boundaries", boundaries)
     result["edges_matched"] = matched
     return result
 

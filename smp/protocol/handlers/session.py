@@ -197,7 +197,16 @@ async def _acquire_lock(
 
 async def session_open(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     """Handle ``smp/session/open``."""
-    p = msgspec.convert(params, SessionOpenParams)
+    import json as _json
+
+    normalized = dict(params)
+    scope = normalized.get("scope", [])
+    if isinstance(scope, str):
+        try:
+            normalized["scope"] = _json.loads(scope) if scope.strip() else []
+        except Exception:  # noqa: BLE001
+            normalized["scope"] = [scope] if scope else []
+    p = msgspec.convert(normalized, SessionOpenParams)
     graph = ctx["graph"]
 
     session_id = f"sess_{uuid.uuid4().hex[:12]}"

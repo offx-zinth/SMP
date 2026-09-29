@@ -118,8 +118,17 @@ class DefaultQueryEngine:
                     node = n
                     break
 
+        # BM25 fallback for multi-term queries ("MMapGraphStore upsert").
+        if not node and " " in query:
+            hits = await self.locate(query, top_k=1)
+            if hits:
+                node = await self._graph.get_node(hits[0]["id"])
+
         if not node:
-            return {"error": f"Node {query} not found"}
+            return {
+                "error": f"Node {query} not found",
+                "hint": "Try smp/locate or smp/search_code for multi-term queries",
+            }
 
         result: dict[str, Any] = {"entity": self._node_to_dict(node)}
 
@@ -813,6 +822,10 @@ class DefaultQueryEngine:
         """Best-effort coverage signal (codebase-memory ``check_index_coverage`` parity)."""
         if scope and scope != "full":
             nodes = await self._graph.find_nodes_by_scope(scope)
+            if not nodes:
+                # Absolute paths defeat prefix match: fall back to substring.
+                all_nodes = await self._graph.find_nodes()
+                nodes = [n for n in all_nodes if scope in n.file_path or scope in n.id]
         else:
             nodes = await self._graph.find_nodes()
         files: dict[str, int] = {}
