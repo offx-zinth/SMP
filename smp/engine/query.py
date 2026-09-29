@@ -122,12 +122,21 @@ class DefaultQueryEngine:
         if not node and " " in query:
             # Prefer an exact token hit (usually the class/function name) over
             # pure BM25 rank, which can prefer longer docstring matches.
+            # Skip test nodes so "MMapGraphStore upsert" resolves to the class.
             for token in query.split():
-                candidate_id = await self._resolve_node_id(token)
-                if candidate_id is not None:
-                    node = await self._graph.get_node(candidate_id)
-                    if node is not None:
+                for cand in await self._graph.find_nodes(name=token):
+                    if not self._is_test_node(cand):
+                        node = cand
                         break
+                if node is not None:
+                    break
+            if node is None:
+                for token in query.split():
+                    candidate_id = await self._resolve_node_id(token)
+                    if candidate_id is not None:
+                        node = await self._graph.get_node(candidate_id)
+                        if node is not None:
+                            break
             if node is None:
                 hits = await self.locate(query, top_k=1)
                 if hits:
@@ -861,7 +870,9 @@ class DefaultQueryEngine:
         nodes = await self._graph.find_nodes()
         dead: list[dict[str, Any]] = []
         for n in nodes:
-            if exclude_entry_points and not self._is_test_node(n):
+            if self._is_test_node(n):
+                continue
+            if exclude_entry_points:
                 # Entry points: mains, inits, dunders, exported handlers.
                 lname = (n.structural.name or "").lower()
                 if lname in {"main", "__main__", "__init__"} or lname.startswith("test_"):

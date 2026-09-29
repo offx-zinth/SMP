@@ -237,7 +237,11 @@ async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
             "md": "Markdown",
         }.get(ext, ext or "unknown")
         languages[lang] = languages.get(lang, 0) + 1
-        directory = "/".join(parts[:-1]) or "(root)"
+        if "SMP" in parts:
+            idx = len(parts) - 1 - parts[::-1].index("SMP")
+            directory = "/".join(parts[idx + 1 : -1]) or "(root)"
+        else:
+            directory = "/".join(parts[:-1]) or "(root)"
         file_tree[directory] = file_tree.get(directory, 0) + 1
 
     scored: list[dict[str, Any]] = []
@@ -264,27 +268,34 @@ async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
         )
         name_lower = (node.structural.name or "").lower()
         is_test = _is_test_path(node.file_path) or name_lower.startswith("test_")
-        # Routes: HTTP verb decorators (@app.get, @router.post, @get ...).
+        # Routes: HTTP verb decorators (@app.get("/path"), @router.post ...).
         for dec in node.semantic.decorators or []:
-            verb = dec.lstrip("@").split(".")[-1].split("(")[0].lower()
+            text = dec.lstrip("@").strip()
+            verb = text.split(".")[-1].split("(")[0].lower()
             if verb in _HTTP_VERBS and not is_test:
+                import re as _re
+
+                m = _re.search(r"""['\"]([^'\",)]+)['\"]""", text)
+                url = m.group(1) if m else node.file_path
                 routes.append(
                     {
                         "method": verb.upper(),
-                        "path": node.file_path,
+                        "path": url,
                         "handler": node.structural.name,
                         "node_id": node.id,
                     }
                 )
         if is_test:
             continue
-        # Real entry points: mains/CLIs, not every orphan function.
+        # Real entry points: mains/CLIs, not dunders, wrappers, or registry fns.
         if (
             node.type.value in ("Function", "Class")
             and in_deg == 0
             and out_deg > 0
+            and not name_lower.startswith(("__", "test_", "smp_", "tool_"))
+            and name_lower not in {"tool_fn", "_make_tool", "_call_rpc", "_get_context"}
             and (
-                name_lower in {"main", "cli", "app", "serve", "run", "mcp"}
+                name_lower in {"main", "cli", "app", "serve", "run", "mcp", "ingest_directory"}
                 or node.file_path.endswith(("cli.py", "main.py", "__main__.py", "mcp.py", "server.py"))
             )
         ):
