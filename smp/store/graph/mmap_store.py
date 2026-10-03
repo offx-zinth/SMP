@@ -852,49 +852,58 @@ class MMapGraphStore(GraphStore):
                 # Strategy 5: Case-insensitive fallback (last resort)
                 if not matched_node_ids:
                     matched_node_ids.update(by_name_lower.get(placeholder_content.lower(), ()))
-
-                # Precision guard: highly ambiguous bare names (close, get,
-                # connect — 100+ candidates) are name-collisions, not real
-                # calls. Keep the placeholder unresolved instead of fanning
-                # out to every same-named method (276->3 for close).
-                # Exact FQ hits always win; single-digit fuzzy sets still link.
+                # Precision: two-tier references. A bare name with several
+                # same-named defs (close, get, connect) is ambiguous — linking
+                # CALLS to every candidate (276 targets for close) is a false
+                # positive factory. Tiers:
+                #   exact/same_file/single -> CALLS (confident callee)
+                #   2..cap, no same-file hit -> REFERENCES (unresolved mention,
+                #     still queryable via traverse(REFERENCES), excluded from
+                #     trace/impact CALLS analysis)
+                #   >cap -> skip, placeholder kept for a later ingest.
                 max_fuzzy_fanout = 10
-                resolution = "exact" if placeholder_content in by_name else "fuzzy"
-                if len(matched_node_ids) > max_fuzzy_fanout and placeholder_content not in by_fq_name:
-                    # Allow small same-file clusters through: if the source
-                    # file already defines the name, keep only those.
-                    source_node = self._nodes.get(edge.source_id)
-                    if source_node is not None:
-                        same_file = {
-                            nid
-                            for nid in matched_node_ids
-                            if self._nodes.get(nid) is not None and self._nodes[nid].file_path == source_node.file_path
-                        }
-                        if same_file and len(same_file) <= max_fuzzy_fanout:
-                            matched_node_ids = same_file
-                            resolution = "same_file"
-                        else:
-                            log.info(
-                                "placeholder_skipped_ambiguous",
-                                name=placeholder_content,
-                                candidates=len(matched_node_ids),
-                            )
-                            continue
-                    else:
-                        log.info(
-                            "placeholder_skipped_ambiguous",
-                            name=placeholder_content,
-                            candidates=len(matched_node_ids),
-                        )
-                        continue
+                same_file: set[str] = set()
+                source_node = self._nodes.get(edge.source_id)
+                if source_node is not None:
+                    same_file = {
+                        nid
+                        for nid in matched_node_ids
+                        if self._nodes.get(nid) is not None and self._nodes[nid].file_path == source_node.file_path
+                    }
+                if placeholder_content in by_fq_name:
+                    resolution = "exact"
+                    targets = set(by_fq_name[placeholder_content])
+                    edge_kind = edge.type
+                elif same_file:
+                    resolution = "same_file"
+                    targets = same_file
+                    edge_kind = edge.type
+                elif len(matched_node_ids) == 1:
+                    resolution = "exact"
+                    targets = set(matched_node_ids)
+                    edge_kind = edge.type
+                elif len(matched_node_ids) <= max_fuzzy_fanout:
+                    # Ambiguous *calls* become REFERENCES (honest mention);
+                    # other kinds (e.g. IMPORTS) keep their declared type so
+                    # import analysis is unaffected by call disambiguation.
+                    resolution = "fuzzy"
+                    targets = set(matched_node_ids)
+                    edge_kind = EdgeType.REFERENCES if edge.type == EdgeType.CALLS else edge.type
+                else:
+                    log.info(
+                        "placeholder_skipped_ambiguous",
+                        name=placeholder_content,
+                        candidates=len(matched_node_ids),
+                    )
+                    continue
 
                 # Add all matched edges (deduplication handled by upsert_edges)
-                for node_id in matched_node_ids:
+                for node_id in targets:
                     to_add.append(
                         GraphEdge(
                             source_id=edge.source_id,
                             target_id=node_id,
-                            type=edge.type,
+                            type=edge_kind,
                             metadata={"resolution": resolution},
                         )
                     )
