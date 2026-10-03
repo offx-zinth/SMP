@@ -941,12 +941,14 @@ class DefaultQueryEngine:
         }
 
     async def dead_code(self, top_k: int = 50, exclude_entry_points: bool = True) -> dict[str, Any]:
-        """Zero-degree symbols (codebase-memory ``max_degree=0`` parity).
+        """Zero-degree code symbols (codebase-memory ``max_degree=0`` parity).
 
-        Fixture/sample corpora (``e2e_test_samples``, ``test_realworld``,
-        ``benchmarks``, ``fixtures``) are isolated by design — they report
-        as zero-degree but are not dead code, so they are excluded and
-        reported separately for transparency.
+        Docs/config leaf nodes (Section/Config) are unreferenced by design
+        and never reported here — this targets dead *code* (Function/Class/
+        Method). Fixture/sample corpora (``e2e_test_samples``,
+        ``test_realworld``, ``benchmarks``, ``fixtures``) are isolated by
+        design — they report as zero-degree but are not dead code, so they
+        are excluded and reported separately for transparency.
         """
         excluded_substrings = frozenset(
             {
@@ -959,6 +961,7 @@ class DefaultQueryEngine:
                 "sample_project",
             }
         )
+        code_types = frozenset({"Function", "Class", "Method"})
         nodes = await self._graph.find_nodes()
         dead: list[dict[str, Any]] = []
         skipped_fixtures = 0
@@ -982,7 +985,7 @@ class DefaultQueryEngine:
             # File nodes carry DEFINES edges by construction; only flag
             # truly isolated symbols (DEFINES-only incoming still counts as dead).
             non_defines_in = [e for e in ins if e.type != EdgeType.DEFINES]
-            if not outs and not non_defines_in and n.type.value in ("Function", "Class", "Method", "Section", "Config"):
+            if not outs and not non_defines_in and n.type.value in code_types:
                 dead.append(self._node_to_dict(n))
         # Deterministic order (file, line) instead of ingestion order.
         dead.sort(key=lambda d: (d.get("file_path", ""), d.get("start_line", 0), d.get("name", "")))

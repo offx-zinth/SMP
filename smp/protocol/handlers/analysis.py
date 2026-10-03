@@ -231,10 +231,15 @@ async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
             "swift": "Swift",
             "kt": "Kotlin",
             "m": "MATLAB",
-            "toml": "TOML",
+            "md": "Markdown",
+            "markdown": "Markdown",
+            "html": "HTML",
+            "htm": "HTML",
+            "json": "JSON",
             "yaml": "YAML",
             "yml": "YAML",
-            "md": "Markdown",
+            "toml": "TOML",
+            "env": "Config",
         }.get(ext, ext or "unknown")
         languages[lang] = languages.get(lang, 0) + 1
         if "SMP" in parts:
@@ -288,9 +293,11 @@ async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
         if is_test:
             continue
         # Real entry points: mains/CLIs, not dunders, wrappers, or registry fns.
+        # NOTE: File DEFINES edges give every symbol in_deg >= 1, so the
+        # caller check uses incoming CALLS edges (real callers), not total
+        # degree — otherwise DEFINES would suppress all entry points.
         if (
             node.type.value in ("Function", "Class")
-            and in_deg == 0
             and out_deg > 0
             and not name_lower.startswith(("__", "test_", "smp_", "tool_"))
             and name_lower not in {"tool_fn", "_make_tool", "_call_rpc", "_get_context"}
@@ -299,7 +306,13 @@ async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
                 or node.file_path.endswith(("cli.py", "main.py", "__main__.py", "mcp.py", "server.py"))
             )
         ):
-            entry_points.append({"node_id": node.id, "name": node.structural.name, "file": node.file_path})
+            try:
+                incoming = await graph.get_edges(node.id, direction="incoming")
+            except (NotImplementedError, AttributeError):
+                incoming = []
+            real_callers = [e for e in incoming if e.type.value != "DEFINES"]
+            if not real_callers:
+                entry_points.append({"node_id": node.id, "name": node.structural.name, "file": node.file_path})
     scored.sort(key=lambda d: d["degree"], reverse=True)
     hotspots = scored[:top_k]
     entry_points = entry_points[:top_k]
