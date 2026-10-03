@@ -132,7 +132,12 @@ class DefaultGraphBuilder:
         entity_name: str,
         module_path: str,
     ) -> str | None:
-        """Look up the actual node ID for a cross-file reference."""
+        """Look up the actual node ID for a cross-file reference.
+
+        Precision-first: exact path or stem match wins; a single
+        unambiguous candidate is accepted; multiple ambiguous candidates
+        return None (placeholder kept) instead of a false-positive link.
+        """
         log.info("resolving_cross_file", entity=entity_name, module=module_path)
         candidates = await self._store.find_nodes(name=entity_name)
         log.info("resolve_candidates", count=len(candidates))
@@ -140,7 +145,10 @@ class DefaultGraphBuilder:
             return None
 
         if not module_path:
-            return candidates[0].id
+            # No module hint: only link when unambiguous.
+            if len(candidates) == 1:
+                return candidates[0].id
+            return None
 
         import os
 
@@ -156,7 +164,9 @@ class DefaultGraphBuilder:
                 log.info("resolve_match_stem", id=n.id, filename=filename, stem=module_stem)
                 return n.id
 
-        return candidates[0].id
+        if len(candidates) == 1:
+            return candidates[0].id
+        return None
 
     async def resolve_pending_edges(self) -> int:
         """Re-attempt cross-file edges that were deferred."""

@@ -25,6 +25,9 @@ class NodeType(enum.StrEnum):
     FILE = "File"
     CLASS = "Class"
     FUNCTION = "Function"
+    METHOD = "Method"
+    MODULE = "Module"
+    SECTION = "Section"
     VARIABLE = "Variable"
     INTERFACE = "Interface"
     TEST = "Test"
@@ -64,6 +67,11 @@ class Language(enum.StrEnum):
     KOTLIN = "kotlin"
     RUBY = "ruby"
     MATLAB = "matlab"
+    MARKDOWN = "markdown"
+    YAML = "yaml"
+    TOML = "toml"
+    JSON = "json"
+    HTML = "html"
     UNKNOWN = "unknown"
 
 

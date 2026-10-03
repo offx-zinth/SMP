@@ -245,15 +245,54 @@ class DefaultQueryEngine:
     async def _resolve_node_id(self, query: str) -> str | None:
         """Resolve a node id, exact file path, structural name, or id fragment to a node id.
 
-        Improved resolution strategy:
+        Precision-first resolution:
         1. Exact match by full node ID
-        2. Exact match by name with preference for most connected node
-        3. Deterministic file path ordering as tiebreaker
-        4. File path match
-        5. Partial ID match
+        2. Qualified ``file:name`` / ``file::name`` / ``Class.method`` (file-filtered)
+        3. Exact name with file-hint filtering, most-connected wins
+        4. Deterministic file path ordering as tiebreaker
+        5. File path match, then partial ID match
         """
         if await self._graph.get_node(query) is not None:
             return query
+
+        # Qualified queries: "mmap_store.py:close", "MMapGraphStore.close",
+        # "smp/store/graph/mmap_store.py::close".
+        file_hint = ""
+        name_part = query
+        q = query.replace("::", ":").replace("#", ":")
+        if ":" in q:
+            maybe_file, maybe_name = q.rsplit(":", 1)
+            if maybe_name and ("/" in maybe_file or "." in maybe_file or maybe_file.endswith(".py")):
+                file_hint, name_part = maybe_file, maybe_name
+            elif "." not in maybe_name and maybe_file:
+                # "close" alone has no file part; keep whole query as name.
+                pass
+        elif "." in query and "/" not in query:
+            # "MMapGraphStore.close" -> name=close, hint=MMapGraphStore (class/file stem).
+            maybe_hint, maybe_name = query.rsplit(".", 1)
+            if maybe_name:
+                file_hint, name_part = maybe_hint, maybe_name
+
+        if file_hint and name_part and name_part != query:
+            candidates = await self._graph.find_nodes(name=name_part)
+            if candidates:
+                # Prefer candidates whose file path contains the hint stem.
+                hint_lower = file_hint.lower().replace(".py", "")
+                filtered = [c for c in candidates if hint_lower in c.file_path.lower()]
+                pool = filtered or candidates
+                if len(pool) == 1:
+                    return pool[0].id
+                # Most-connected wins among the filtered pool.
+                best = pool[0]
+                best_count = -1
+                for candidate in sorted(pool, key=lambda n: n.file_path):
+                    outgoing = await self._graph.get_edges(candidate.id, direction="outgoing")
+                    incoming = await self._graph.get_edges(candidate.id, direction="incoming")
+                    count = len(outgoing) + len(incoming)
+                    if count > best_count:
+                        best_count = count
+                        best = candidate
+                return best.id
 
         # Find all nodes with matching name
         candidates = await self._graph.find_nodes(name=query)
@@ -837,7 +876,16 @@ class DefaultQueryEngine:
         }
 
     async def index_coverage(self, scope: str = "full") -> dict[str, Any]:
-        """Best-effort coverage signal (codebase-memory ``check_index_coverage`` parity)."""
+        """Best-effort coverage signal (codebase-memory ``check_index_coverage`` parity).
+
+        Adds transparency fields cbm consumers expect: ``indexed_at``,
+        ``generation`` (content fingerprint), ``freshness`` per scope,
+        ``stale_files``, ``files_truncated``, and ``excluded`` dirs.
+        """
+        from datetime import UTC, datetime
+
+        from smp.cli import SKIP_DIR_NAMES
+
         if scope and scope != "full":
             nodes = await self._graph.find_nodes_by_scope(scope)
             if not nodes:
@@ -852,12 +900,39 @@ class DefaultQueryEngine:
             files[n.file_path] = files.get(n.file_path, 0) + 1
             if not n.structural.start_line or not n.structural.end_line:
                 missing_lines += 1
+        # Generation: deterministic fingerprint of (file, count) + totals.
+        import hashlib
+
+        fingerprint_src = "|".join(f"{fp}:{files[fp]}" for fp in sorted(files))
+        fingerprint_src += f"|nodes:{len(nodes)}"
+        generation = hashlib.blake2b(fingerprint_src.encode(), digest_size=8).hexdigest()
+        # Freshness: compare parse-status staleness when the store exposes it.
+        stale_files: list[str] = []
+        get_status = getattr(self._graph, "get_parse_status", None)
+        if callable(get_status):
+            for fp in list(files)[:500]:
+                try:
+                    status = await get_status(fp)
+                    if status is not None and getattr(status, "stale", False):
+                        stale_files.append(fp)
+                except (OSError, ValueError, AttributeError):
+                    continue
+        freshness = "stale" if stale_files else "metadata_match"
+        sorted_files = sorted(files)
+        truncated = len(sorted_files) > 100
         return {
             "scope": scope,
             "nodes": len(nodes),
             "files": len(files),
-            "files_indexed": sorted(files)[:100],
+            "files_indexed": sorted_files[:100],
+            "files_truncated": truncated,
+            "files_total": len(sorted_files),
             "nodes_missing_lines": missing_lines,
+            "indexed_at": datetime.now(UTC).isoformat(),
+            "generation": generation,
+            "freshness": freshness,
+            "stale_files": stale_files[:20],
+            "excluded_dirs": sorted(SKIP_DIR_NAMES),
             "coverage_note": (
                 "Best-effort signal, not a completeness guarantee: files absent here "
                 "may still be unindexed (gitignored, binary, or parse-skipped). "
@@ -866,11 +941,33 @@ class DefaultQueryEngine:
         }
 
     async def dead_code(self, top_k: int = 50, exclude_entry_points: bool = True) -> dict[str, Any]:
-        """Zero-degree symbols (codebase-memory ``max_degree=0`` parity)."""
+        """Zero-degree symbols (codebase-memory ``max_degree=0`` parity).
+
+        Fixture/sample corpora (``e2e_test_samples``, ``test_realworld``,
+        ``benchmarks``, ``fixtures``) are isolated by design — they report
+        as zero-degree but are not dead code, so they are excluded and
+        reported separately for transparency.
+        """
+        excluded_substrings = frozenset(
+            {
+                "e2e_test_samples",
+                "test_realworld",
+                "test_codebase",
+                "mcp_eval_project",
+                "benchmarks",
+                "/fixtures/",
+                "sample_project",
+            }
+        )
         nodes = await self._graph.find_nodes()
         dead: list[dict[str, Any]] = []
+        skipped_fixtures = 0
         for n in nodes:
             if self._is_test_node(n):
+                continue
+            fp = (n.file_path or "").replace("\\", "/")
+            if any(sub in fp for sub in excluded_substrings):
+                skipped_fixtures += 1
                 continue
             if exclude_entry_points:
                 # Entry points: mains, inits, dunders, exported handlers.
@@ -882,11 +979,15 @@ class DefaultQueryEngine:
                 ins = await self._graph.get_edges(n.id, direction="incoming")
             except (NotImplementedError, AttributeError):
                 continue
-            if not outs and not ins and n.type.value in ("Function", "Class"):
+            # File nodes carry DEFINES edges by construction; only flag
+            # truly isolated symbols (DEFINES-only incoming still counts as dead).
+            non_defines_in = [e for e in ins if e.type != EdgeType.DEFINES]
+            if not outs and not non_defines_in and n.type.value in ("Function", "Class", "Method", "Section", "Config"):
                 dead.append(self._node_to_dict(n))
-            if len(dead) >= top_k:
-                break
-        return {"total": len(dead), "nodes": dead}
+        # Deterministic order (file, line) instead of ingestion order.
+        dead.sort(key=lambda d: (d.get("file_path", ""), d.get("start_line", 0), d.get("name", "")))
+        page = dead[:top_k] if top_k > 0 else dead
+        return {"total": len(dead), "returned": len(page), "nodes": page, "skipped_fixtures": skipped_fixtures}
 
     async def semantic_search(
         self,

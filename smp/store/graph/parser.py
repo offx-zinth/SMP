@@ -237,6 +237,26 @@ _LANGUAGE_SPECS: Final[tuple[LanguageSpec, ...]] = (
 _EXTENSION_TO_LANGUAGE: Final[dict[str, str]] = {ext: spec.key for spec in _LANGUAGE_SPECS for ext in spec.extensions}
 _EXTENSION_TO_LANGUAGE.update({".py": "python", ".pyw": "python", ".pyi": "python"})
 
+# Lightweight docs/config languages (no tree-sitter grammar).
+# These power the unified code+docs graph: markdown headings become
+# Section nodes, YAML/TOML/JSON top-level keys become Config nodes.
+_DOC_EXTENSION_TO_LANGUAGE: Final[dict[str, str]] = {
+    ".md": "markdown",
+    ".markdown": "markdown",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".toml": "toml",
+    ".json": "json",
+    ".html": "html",
+    ".htm": "html",
+    ".env": "config",
+}
+_EXTENSION_TO_LANGUAGE.update(_DOC_EXTENSION_TO_LANGUAGE)
+
+#: Extensions ingested as docs (re-exported for CLI collection).
+DOC_EXTENSIONS: Final[frozenset[str]] = frozenset(_DOC_EXTENSION_TO_LANGUAGE)
+DOC_LANGUAGES: Final[frozenset[str]] = frozenset({"markdown", "yaml", "toml", "json", "html", "config"})
+
 _SPEC_BY_KEY: Final[dict[str, LanguageSpec]] = {spec.key: spec for spec in _LANGUAGE_SPECS}
 
 _PYTHON_EXTENSIONS: Final[set[str]] = {".py", ".pyw", ".pyi"}
@@ -406,7 +426,9 @@ class CodeParser:
         """Parse a source file and extract nodes.
 
         Python files use the dedicated walker; every other supported
-        language uses the generic table-driven walker.  Files with
+        language uses the generic table-driven walker.  Docs/config
+        files (markdown, yaml, toml, json, html, .env) use lightweight
+        line-based parsers so code+docs share one graph.  Files with
         unknown extensions yield an empty :class:`ParsedFile`.
         """
         path = Path(file_path)
@@ -417,8 +439,13 @@ class CodeParser:
         language = self._language_for_path(path)
         if language == LANG_PYTHON:
             return self._parse_python(str(path), content)
+        if language in DOC_LANGUAGES:
+            return self._parse_docs(str(path), content, language)
         if language != LANG_UNKNOWN:
             return self._parse_generic(str(path), content, language)
+        # Extensionless docs (Dockerfile, .env without ext) fall back here.
+        if path.name == "Dockerfile" or path.name.startswith(".env"):
+            return self._parse_docs(str(path), content, "config")
         return self._empty_parsed_file(str(path), content)
 
     def parse_content(self, file_path: str, content: bytes) -> ParsedFile:
@@ -426,8 +453,13 @@ class CodeParser:
         language = self._language_for_path(file_path)
         if language == LANG_PYTHON:
             return self._parse_python(file_path, content)
+        if language in DOC_LANGUAGES:
+            return self._parse_docs(file_path, content, language)
         if language != LANG_UNKNOWN:
             return self._parse_generic(file_path, content, language)
+        base = Path(file_path).name
+        if base == "Dockerfile" or base.startswith(".env"):
+            return self._parse_docs(file_path, content, "config")
         return self._empty_parsed_file(file_path, content)
 
     def parse(self, content: str | bytes, file_path: str) -> ParsedFile:
@@ -448,6 +480,142 @@ class CodeParser:
             line_count=len(text.splitlines()),
             content_hash=self._compute_hash(content),
         )
+
+    # ------------------------------------------------------------------
+    # Docs/config walker (unified code+docs graph, no tree-sitter needed)
+    # ------------------------------------------------------------------
+
+    def _parse_docs(self, file_path: str, content: bytes, language: str) -> ParsedFile:
+        """Parse docs/config into Section/Config nodes.
+
+        * markdown/html: one Section per heading.
+        * yaml/toml/json/env/Dockerfile: one Config per top-level key.
+        * Always emits at least the file-level node via the store layer;
+          here we emit content nodes so ``files_indexed`` covers docs.
+        """
+        text = content.decode("utf-8", errors="replace")
+        lines = text.splitlines()
+        file_hash = self._compute_hash(content)
+        nodes: list[ParsedNode] = []
+        if language == "markdown":
+            nodes = self._markdown_sections(file_path, lines)
+        elif language == "html":
+            nodes = self._html_sections(file_path, lines, text)
+        else:
+            nodes = self._config_keys(file_path, lines, language)
+        return ParsedFile(
+            file_path=file_path,
+            language=language,
+            line_count=len(lines),
+            content_hash=file_hash,
+            nodes=nodes,
+        )
+
+    def _markdown_sections(self, file_path: str, lines: list[str]) -> list[ParsedNode]:
+        """One Section node per `# Heading` (level from hash count)."""
+        nodes: list[ParsedNode] = []
+        for idx, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if not stripped.startswith("#"):
+                continue
+            level = len(stripped) - len(stripped.lstrip("#"))
+            if level < 1 or level > 6:
+                continue
+            title = stripped.lstrip("#").strip()
+            if not title:
+                continue
+            # Clamp title for stable ids; keep full text in signature.
+            name = title[:80]
+            node_id = self._make_node_id(file_path, "Section", f"{level}-{name}", idx)
+            # Section ends at next heading or EOF (approx: +20 lines).
+            end = min(len(lines), idx + 20)
+            nodes.append(
+                ParsedNode(
+                    node_id=node_id,
+                    type="Section",
+                    name=name,
+                    signature=f"h{level} {title}"[:120],
+                    docstring="",
+                    start_line=idx,
+                    end_line=end,
+                    tags=[f"h{level}", "docs"],
+                )
+            )
+            if len(nodes) >= 200:
+                break
+        return nodes
+
+    def _html_sections(self, file_path: str, lines: list[str], text: str) -> list[ParsedNode]:
+        """Best-effort headings from <h1..h6>/<title> tags."""
+        import re
+
+        nodes: list[ParsedNode] = []
+        pattern = re.compile(r"<(h[1-6]|title)[^>]*>(.*?)</\1>", re.IGNORECASE | re.DOTALL)
+        for match in pattern.finditer(text):
+            tag = match.group(1).lower()
+            title = re.sub(r"<[^>]+>", "", match.group(2)).strip()
+            if not title:
+                continue
+            # Line number via offset.
+            start_line = text.count("\n", 0, match.start()) + 1
+            node_id = self._make_node_id(file_path, "Section", title[:80], start_line)
+            nodes.append(
+                ParsedNode(
+                    node_id=node_id,
+                    type="Section",
+                    name=title[:80],
+                    signature=f"{tag} {title}"[:120],
+                    docstring="",
+                    start_line=start_line,
+                    end_line=min(len(lines), start_line + 5),
+                    tags=[tag, "docs"],
+                )
+            )
+            if len(nodes) >= 200:
+                break
+        return nodes
+
+    def _config_keys(self, file_path: str, lines: list[str], language: str) -> list[ParsedNode]:
+        """One Config node per top-level `KEY:` / `KEY =` / `"key":` / `KEY=VAL`."""
+        import re
+
+        nodes: list[ParsedNode] = []
+        seen: set[str] = set()
+        key_pattern = re.compile(r"""^\s*(?:"|')?([A-Za-z_][A-Za-z0-9_.\-]*)(?:"|')?\s*[:=]""")
+        env_pattern = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$")
+        for idx, line in enumerate(lines, start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith(("#", "//", ";", "--")):
+                continue
+            key = ""
+            if language == "config" or Path(file_path).name.startswith(".env"):
+                m = env_pattern.match(line)
+                if m:
+                    key = m.group(1)
+            else:
+                m = key_pattern.match(line)
+                # Only top-level (no indent) for yaml/toml/json.
+                if m and (len(line) - len(line.lstrip()) == 0 or language in ("toml", "json")):
+                    key = m.group(1).strip(".-")
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            node_id = self._make_node_id(file_path, "Config", key, idx)
+            nodes.append(
+                ParsedNode(
+                    node_id=node_id,
+                    type="Config",
+                    name=key[:80],
+                    signature=f"{language} {key}"[:120],
+                    docstring="",
+                    start_line=idx,
+                    end_line=idx,
+                    tags=[language, "config"],
+                )
+            )
+            if len(nodes) >= 200:
+                break
+        return nodes
 
     # ------------------------------------------------------------------
     # Python tree-sitter walker

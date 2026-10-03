@@ -75,7 +75,7 @@ _PARSE_CHUNK_SIZE = 32
 _PROGRESS_EVERY = 1000
 
 
-DEFAULT_EXTENSIONS = (
+DEFAULT_CODE_EXTENSIONS = (
     ".py",
     ".pyw",
     ".pyi",
@@ -105,6 +105,43 @@ DEFAULT_EXTENSIONS = (
     ".kts",
     ".m",
 )
+
+#: Docs/config ingested into the same graph (unified code+docs).
+DEFAULT_DOC_EXTENSIONS = (
+    ".md",
+    ".markdown",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".json",
+    ".html",
+    ".htm",
+    ".env",
+)
+
+#: Back-compat: full default set (code + docs).
+DEFAULT_EXTENSIONS = DEFAULT_CODE_EXTENSIONS + DEFAULT_DOC_EXTENSIONS
+
+#: Directories never indexed (build/virtualenv/caches/VCS).
+SKIP_DIR_NAMES = frozenset(
+    {
+        "node_modules",
+        "__pycache__",
+        "venv",
+        ".venv",
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "dist",
+        "build",
+        ".hg",
+        ".svn",
+    }
+)
+
+#: Dot-directories explicitly allowed (e.g. .github/workflows).
+ALLOW_DOT_DIRS = frozenset({".github"})
 DEFAULT_MAX_FILE_SIZE = 1_000_000
 
 
@@ -204,14 +241,17 @@ async def ingest_directory(
     #    ~100k entries costs ~60s of Path object churn, this costs ~5s).
     #    Check order matches the previous sorted(rglob) loop exactly:
     #    extension -> size (skipped++) -> dot/skip path parts.
-    skip_dir_names = frozenset({"node_modules", "__pycache__", "venv", ".venv", "dist", "build"})
+    #    Unified code+docs: extensions already include docs; .github is
+    #    explicitly allowed so workflows are indexed (cbm parity).
+    skip_dir_names = SKIP_DIR_NAMES
     files_to_parse: list[Path] = []
     for dirpath, _dirnames, filenames in os.walk(root, followlinks=False):
         # Prune nothing: oversized files inside skipped dirs must still be
         # counted in `skipped` exactly like the previous implementation.
         for name in filenames:
             suffix = os.path.splitext(name)[1].lower()
-            if suffix not in extensions:
+            # Extensionless docs (Dockerfile, .env) are ingested too.
+            if suffix not in extensions and name not in ("Dockerfile", ".env") and not name.startswith(".env"):
                 continue
             full = os.path.join(dirpath, name)
             try:
@@ -223,7 +263,16 @@ async def ingest_directory(
                 stats["skipped"] += 1
                 continue
             rel_parts = os.path.relpath(full, root).split(os.sep)
-            if any(p.startswith(".") or p in skip_dir_names for p in rel_parts):
+            if any((p in skip_dir_names or (p.startswith(".") and p not in ALLOW_DOT_DIRS)) for p in rel_parts[:-1]):
+                continue
+            # Skip hidden files except explicit docs (.env, .github/* already handled).
+            base = rel_parts[-1]
+            if (
+                base.startswith(".")
+                and base not in (".env",)
+                and not base.startswith(".env.")
+                and os.path.splitext(base)[1].lower() not in extensions
+            ):
                 continue
             files_to_parse.append(Path(full))
     files_to_parse.sort()

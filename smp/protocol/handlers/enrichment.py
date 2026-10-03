@@ -33,6 +33,37 @@ def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def _auto_fields(node: GraphNode) -> dict[str, Any]:
+    """Derive description/tags/score when enrichment runs on bare nodes.
+
+    Keeps ``enrich/batch`` from being a status-only flag: first enrich
+    populates searchable metadata so ``by_status`` moves off 0%.
+    """
+    changes: dict[str, Any] = {}
+    if not node.semantic.description and node.semantic.docstring:
+        first = node.semantic.docstring.strip().splitlines()[0][:200] if node.semantic.docstring.strip() else ""
+        if first:
+            changes["description"] = first
+    elif not node.semantic.description and node.structural.signature:
+        changes["description"] = node.structural.signature[:200]
+    if not node.semantic.tags:
+        tags: list[str] = []
+        lowered = (node.file_path or "").replace("\\", "/").lower()
+        if "/test" in lowered or "test_" in lowered:
+            tags.append("test")
+        if node.file_path.endswith((".md", ".markdown")):
+            tags.append("docs")
+        if node.file_path.endswith((".yaml", ".yml", ".toml", ".json")):
+            tags.append("config")
+        if node.semantic.docstring:
+            tags.append("documented")
+        if tags:
+            changes["tags"] = tags[:8]
+    if not node.semantic.score and node.semantic.docstring:
+        changes["score"] = float(min(1.0, len(node.semantic.docstring) / 500.0))
+    return changes
+
+
 def _replace_semantic(node: GraphNode, **changes: Any) -> GraphNode:
     """Return a copy of *node* with ``semantic`` replaced via msgspec."""
     new_semantic = msgspec.structs.replace(node.semantic, **changes)
@@ -58,6 +89,7 @@ async def enrich(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
         node,
         status="enriched",
         enriched_at=_now_iso(),
+        **_auto_fields(node),
     )
     await graph.upsert_node(updated)
     return {"node_id": p.node_id, "enriched": True}
@@ -80,7 +112,7 @@ async def enrich_batch(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
         if not p.force and node.semantic.manually_set:
             skipped += 1
             continue
-        updated = _replace_semantic(node, status="enriched", enriched_at=timestamp)
+        updated = _replace_semantic(node, status="enriched", enriched_at=timestamp, **_auto_fields(node))
         await graph.upsert_node(updated)
         enriched += 1
 
@@ -94,12 +126,12 @@ async def enrich_stale(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
 
     nodes = await graph.find_nodes_by_scope(p.scope) if p.scope and p.scope != "full" else await graph.find_nodes()
 
-    stale_statuses = {"no_metadata", "stale"}
+    stale_statuses = {"no_metadata", "stale", "auto"}
     timestamp = _now_iso()
     enriched = 0
     for node in nodes:
         if node.semantic.status in stale_statuses:
-            updated = _replace_semantic(node, status="enriched", enriched_at=timestamp)
+            updated = _replace_semantic(node, status="enriched", enriched_at=timestamp, **_auto_fields(node))
             await graph.upsert_node(updated)
             enriched += 1
 
