@@ -722,6 +722,7 @@ class CodeParser:
         """Walk the tree extracting definitions and calls per the language table."""
         spec = _SPEC_BY_KEY.get(lang)
         node_type = node.type
+        scope_depth = len(scope_stack)
 
         if spec is not None:
             if node_type in spec.functions:
@@ -742,7 +743,25 @@ class CodeParser:
         for child in node.children:
             self._walk_generic(child, node, content, file_path, nodes, edge_candidates, scope_stack, lang)
 
-        if scope_stack and scope_stack[-1][1] == node.end_point[0]:
+        # Only a node that actually pushed a scope may close it. Popping on
+        # every node let a body block (``block``, ``return_statement``) that
+        # ends on the same line close its enclosing function, so calls inside
+        # the body were seen with an empty scope stack and dropped. End lines
+        # are stored 1-based, hence ``end_point[0] + 1``.
+        if len(scope_stack) > scope_depth:
+            self._pop_closed_scopes(scope_stack, node.end_point[0] + 1)
+
+    @staticmethod
+    def _pop_closed_scopes(scope_stack: list[tuple[str, int]], end_line: int) -> None:
+        """Drop every scope that has closed by ``end_line``.
+
+        A single ``pop()`` guarded by exact end-line equality leaks the
+        current scope whenever the computed end line drifts by even one
+        line. The leaked scope then mislabels the next sibling as a nested
+        member, producing spurious ``CONTAINS`` edges (``_authenticate``
+        appearing to contain ``rpc_endpoint``).
+        """
+        while scope_stack and scope_stack[-1][1] <= end_line:
             scope_stack.pop()
 
     def _handle_generic_definition(
@@ -757,7 +776,6 @@ class CodeParser:
         kind: str,
     ) -> None:
         """Extract a function/class/interface definition node."""
-        del edge_candidates
         name = self._definition_name(node, parent, content)
         if not name:
             return
@@ -780,6 +798,17 @@ class CodeParser:
             parsed_node.parent_id = scope_stack[-1][0]
         nodes.append(parsed_node)
         scope_stack.append((node_id, end_line))
+
+        if kind == _CLASS_KIND:
+            for base in self._extract_base_classes(node, content):
+                edge_candidates.append(
+                    EdgeCandidate(
+                        source_id=node_id,
+                        target_name=base,
+                        edge_type="INHERITS",
+                        target_file_hint=None,
+                    )
+                )
 
     def _definition_name(self, node: Any, parent: Any | None, content: bytes) -> str:
         """Best-effort definition name: ``name`` field, declarator descent, or parent declarator."""
@@ -912,11 +941,12 @@ class CodeParser:
     ) -> None:
         """Walk the tree and extract nodes."""
         node_type = node.type
+        scope_depth = len(scope_stack)
 
         if node_type in ("function_definition", "async_function_definition", "method"):
             self._handle_function(node, content, file_path, nodes, edge_candidates, scope_stack, lang)
         elif node_type in ("class", "class_definition"):
-            self._handle_class(node, content, file_path, nodes, scope_stack, lang)
+            self._handle_class(node, content, file_path, nodes, edge_candidates, scope_stack, lang)
         elif node_type in ("import_statement", "import_from_statement"):
             self._handle_import(node, content, file_path, edge_candidates, scope_stack)
         elif node_type == "call":
@@ -925,8 +955,10 @@ class CodeParser:
         for child in node.children:
             self._walk_tree(child, content, file_path, nodes, edge_candidates, scope_stack, lang)
 
-        if scope_stack and scope_stack[-1][1] == node.end_point[0]:
-            scope_stack.pop()
+        # Only a node that pushed a scope may close it — see
+        # ``_walk_generic``. End lines are stored 1-based.
+        if len(scope_stack) > scope_depth:
+            self._pop_closed_scopes(scope_stack, node.end_point[0] + 1)
 
     def _handle_function(
         self,
@@ -985,6 +1017,7 @@ class CodeParser:
         content: bytes,
         file_path: str,
         nodes: list[ParsedNode],
+        edge_candidates: list[EdgeCandidate],
         scope_stack: list[tuple[str, int]],
         lang: str,
     ) -> None:
@@ -999,9 +1032,10 @@ class CodeParser:
         end_line = node.end_point[0] + 1
         docstring = self._extract_docstring(node, content)
         decorators = self._extract_decorators(node, content)
+        bases = self._extract_base_classes(node, content)
 
         node_id = self._make_node_id(file_path, "Class", name, start_line)
-        class_signature = f"class {name}"
+        class_signature = f"class {name}({', '.join(bases)})" if bases else f"class {name}"
 
         parsed_node = ParsedNode(
             node_id=node_id,
@@ -1019,6 +1053,61 @@ class CodeParser:
 
         nodes.append(parsed_node)
         scope_stack.append((node_id, end_line))
+
+        for base in bases:
+            edge_candidates.append(
+                EdgeCandidate(
+                    source_id=node_id,
+                    target_name=base,
+                    edge_type="INHERITS",
+                    target_file_hint=None,
+                )
+            )
+
+    @staticmethod
+    def _extract_base_classes(node: Any, content: bytes) -> list[str]:
+        """Extract base-class names from a class definition node.
+
+        Best-effort across grammars: reads the ``superclass`` field when
+        present (Python ``class_definition``, Java ``class_declaration``),
+        collecting bare and dotted base names while skipping keyword
+        arguments (e.g. ``metaclass=``). Generic parameters (``Base[T]``)
+        are stripped to the base name. Returns [] when unavailable.
+        """
+        try:
+            superclass = node.child_by_field_name("superclass")
+        except (AttributeError, ValueError):
+            superclass = None
+        container: Any | None = None
+        if superclass is not None:
+            arg_list = next((c for c in superclass.children if c.type == "argument_list"), None)
+            container = arg_list if arg_list is not None else superclass
+        else:
+            # Older tree-sitter-python grammars carry no "superclass" field:
+            # bases sit in a direct "argument_list" child of the definition.
+            container = next((c for c in node.children if c.type == "argument_list"), None)
+        if container is None:
+            return []
+        bases: list[str] = []
+        for child in container.children:
+            if child.type == "identifier":
+                text = content[child.start_byte : child.end_byte].decode("utf-8", errors="replace")
+            elif child.type in (
+                "attribute",
+                "dotted_name",
+                "scoped_identifier",
+                "scoped_type_identifier",
+                "type_identifier",
+                "generic_type",
+            ):
+                text = (
+                    content[child.start_byte : child.end_byte].decode("utf-8", errors="replace").split("[")[0].strip()
+                )
+            else:
+                continue
+            if text and text not in bases:
+                bases.append(text)
+        return bases
 
     def _handle_import(
         self,

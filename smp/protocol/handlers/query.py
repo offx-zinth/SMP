@@ -12,11 +12,14 @@ from typing import Any
 import msgspec
 
 from smp.core.models import (
+    CodeSnippetParams,
     ContextParams,
+    DetectChangesParams,
     FlowParams,
     ImpactParams,
     LocateParams,
     NavigateParams,
+    QueryParams,
     SearchParams,
     SemanticSearchParams,
     TraceParams,
@@ -56,7 +59,36 @@ async def trace(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     )
     total = len(result)
     offset = int(params.get("offset", 0) or 0)
-    return {"nodes": result, "total": total, "offset": offset}
+    # Direction-precise totals from per-node reach labels ("self" excluded).
+    # Legacy "callers_total" previously echoed "total" for every direction,
+    # misreporting callees as callers; "total" still carries the full count.
+    reaches = [n.get("reach") if isinstance(n, dict) else None for n in result]
+    if any(r is not None for r in reaches):
+        callers = sum(1 for r in reaches if r in ("caller", "both"))
+        callees = sum(1 for r in reaches if r in ("callee", "both"))
+    else:
+        # Foreign/legacy engine without reach labels: fall back to
+        # direction-implied counts rather than failing.
+        callers = total if p.direction in ("incoming", "both") else 0
+        callees = total if p.direction in ("outgoing", "both") else 0
+    response: dict[str, Any] = {
+        "function": p.start,
+        "direction": p.direction,
+        "callers_total": callers,
+        "callers_total_relation": "eq",
+        "callees_total": callees,
+        "nodes": result,
+        "total": total,
+        "offset": offset,
+    }
+    if p.direction == "both":
+        response["note"] = (
+            "direction=both unions true callers (reach=caller) and true callees "
+            "(reach=callee) from separate traversals; nodes reachable only via "
+            "a mixed out-then-in walk (e.g. sibling handlers sharing a helper) "
+            "are excluded as neither."
+        )
+    return response
 
 
 async def context(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
@@ -150,3 +182,39 @@ async def flow(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     p = msgspec.convert(params, FlowParams)
     engine = ctx["engine"]
     return await engine.find_flow(p.start, p.end, p.flow_type)  # type: ignore[no-any-return]
+
+
+async def query(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/query`` — read-only graph query (query_graph parity)."""
+    p = msgspec.convert(params, QueryParams)
+    engine = ctx["engine"]
+    return await engine.query_graph(  # type: ignore[no-any-return]
+        p.query or str(params.get("cypher", params.get("q", ""))),
+        int(params.get("max_rows", p.max_rows) or 200),
+        int(params.get("offset", p.offset) or 0),
+    )
+
+
+async def code_snippet(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/code_snippet`` — get_code_snippet parity."""
+    p = msgspec.convert(params, CodeSnippetParams)
+    engine = ctx["engine"]
+    qn = p.qualified_name or str(params.get("qn", params.get("function_name", params.get("name", ""))))
+    return await engine.get_code_snippet(  # type: ignore[no-any-return]
+        qn,
+        str(params.get("source_mode", p.source_mode) or "auto"),
+        int(params.get("max_lines", p.max_lines) or 500),
+    )
+
+
+async def detect_changes(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
+    """Handle ``smp/detect_changes`` — git-aware detect_changes parity."""
+    p = msgspec.convert(params, DetectChangesParams)
+    engine = ctx["engine"]
+    return await engine.detect_changes(  # type: ignore[no-any-return]
+        str(params.get("base_branch", p.base_branch) or "main"),
+        int(params.get("depth", p.depth) or 1),
+        str(params.get("direction", p.direction) or "both"),
+        int(params.get("limit", p.limit) or 50),
+        str(params.get("scope", p.scope) or "files"),
+    )

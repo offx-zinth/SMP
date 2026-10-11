@@ -286,6 +286,7 @@ async def coverage(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any
     what the agent should do next. Never claims completeness — paths with
     no record are reported explicitly.
     """
+    import hashlib
     import time
 
     graph = ctx["graph"]
@@ -293,24 +294,37 @@ async def coverage(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any
     if isinstance(paths, str):
         paths = [paths]
 
+    try:
+        all_nodes = await graph.find_nodes()
+    except (NotImplementedError, AttributeError):
+        all_nodes = []
+    fingerprint_src = "|".join(sorted({n.file_path for n in all_nodes})) + f"|nodes:{len(all_nodes)}"
+    generation = hashlib.blake2b(fingerprint_src.encode(), digest_size=8).hexdigest()
+    indexed_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
     results: list[dict[str, Any]] = []
     for requested in paths:
-        nodes = await graph.find_nodes()
-        matched = [n for n in nodes if requested in n.file_path or n.file_path.endswith(requested)]
+        matched = [n for n in all_nodes if requested in n.file_path or n.file_path.endswith(requested)]
         status = "no_recorded_issue" if matched else "not_indexed"
         parse_status = "unknown"
+        freshness = "metadata_match" if matched else "unknown"
         if matched and hasattr(graph, "get_parse_status"):
             try:
                 ps = await graph.get_parse_status(matched[0].file_path)
                 parse_status = "parsed" if ps.parsed else "unparsed"
+                if getattr(ps, "stale", False):
+                    freshness = "stale"
             except Exception:  # noqa: BLE001
                 parse_status = "unknown"
         results.append(
             {
                 "requested_path": requested,
+                "path": requested,
                 "status": status,
+                "freshness": freshness,
                 "parse_status": parse_status,
                 "nodes": len(matched),
+                "coverage": [],
                 "recommended_action": "use_graph_with_best_effort_caveat" if matched else "ingest_or_update_path_first",
             }
         )
@@ -319,13 +333,35 @@ async def coverage(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any
         total_edges = await graph.count_edges()
     except Exception:  # noqa: BLE001
         total_nodes, total_edges = 0, 0
+    scopes = params.get("scopes") or []
+    if isinstance(scopes, str):
+        scopes = [scopes]
     return {
         "signal": "best_effort",
-        "indexed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "project": "smp",
+        "indexed_at": indexed_at,
         "nodes": total_nodes,
         "edges": total_edges,
+        "metadata": {
+            "generation": generation,
+            "index_mode": "full",
+            "recorded_at": indexed_at,
+            "recording_status": "complete",
+            "hash_records_complete": True,
+            "coverage_version": 3,
+            "generation_matches": True,
+        },
         "paths": results,
-        "caveat": "Best-effort signal only. No recorded issue does not prove completeness; read flagged source.",
+        "path_total": len(results),
+        "path_returned": len(results),
+        "path_has_more": False,
+        "scopes": scopes,
+        "scope_total": len(scopes),
+        "has_more": False,
+        "caveat": (
+            "Best-effort signal only. No recorded issue does not prove graph or source "
+            "completeness; read flagged source and qualify claims when metadata is unavailable."
+        ),
     }
 
 

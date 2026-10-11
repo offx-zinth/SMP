@@ -721,6 +721,7 @@ class MMapGraphStore(GraphStore):
             return []
 
         doc_fields, idf, avgdl = build_corpus(filtered)
+        lowered_terms = {t.lower() for t in terms}
         scored: list[tuple[float, str, GraphNode]] = []
         for node, fields in zip(filtered, doc_fields, strict=True):
             hay_tokens: set[str] = set()
@@ -734,8 +735,14 @@ class MMapGraphStore(GraphStore):
             length = sum(len(toks) * _BM25_FIELD_WEIGHTS.get(f, 1.0) for f, toks in fields.items()) or 1.0
             score, matched_on = score_node(terms, fields, idf, avgdl, length)
             raw = query.lower()
-            if raw and (raw == node.structural.name.lower() or raw in node.id.lower()):
+            name_lower = (node.structural.name or "").lower()
+            if raw and (raw == name_lower or raw in node.id.lower()):
                 score += 20.0
+            elif name_lower and name_lower in lowered_terms:
+                # Single-term query naming the symbol exactly ("GraphNode
+                # model definition"): boost, else long docstrings outrank
+                # the definition itself.
+                score += 12.0
             if score > 0:
                 scored.append((score, matched_on or "name", node))
         scored.sort(key=lambda x: -x[0])
@@ -788,6 +795,12 @@ class MMapGraphStore(GraphStore):
 
         for node in self._nodes.values():
             if not node.structural.name:
+                continue
+            # Docs/config nodes (markdown Sections, config leaves) are not
+            # code symbols: a "## MMapGraphStore" heading must never become
+            # a CALLS/INHERITS target. File nodes stay (imports reference
+            # modules by name).
+            if node.type in (NodeType.SECTION, NodeType.CONFIG):
                 continue
             name = node.structural.name
             by_name.setdefault(name, []).append(node.id)
@@ -886,6 +899,17 @@ class MMapGraphStore(GraphStore):
                     # Ambiguous *calls* become REFERENCES (honest mention);
                     # other kinds (e.g. IMPORTS) keep their declared type so
                     # import analysis is unaffected by call disambiguation.
+                    # INHERITS/IMPLEMENTS are never fuzzy-linked: inheriting
+                    # up to 10 same-named classes is a false-positive
+                    # factory, so the placeholder is kept for a later,
+                    # more precise ingest instead.
+                    if edge.type in (EdgeType.INHERITS, EdgeType.IMPLEMENTS):
+                        log.info(
+                            "placeholder_skipped_ambiguous_inherits",
+                            name=placeholder_content,
+                            candidates=len(matched_node_ids),
+                        )
+                        continue
                     resolution = "fuzzy"
                     targets = set(matched_node_ids)
                     edge_kind = EdgeType.REFERENCES if edge.type == EdgeType.CALLS else edge.type
@@ -1094,6 +1118,16 @@ class MMapGraphStore(GraphStore):
         structural_edges: list[GraphEdge] = [
             GraphEdge(source_id=file_node_id, target_id=n.id, type=EdgeType.DEFINES) for n in graph_nodes
         ]
+        # Containment edges: parent scope CONTAINS each nested symbol
+        # (Class -> methods, function -> nested functions). The parser
+        # records parent_id per node; materialize it here while `parsed`
+        # is in scope (it is deliberately not retained). Single pass.
+        node_ids = {n.id for n in graph_nodes}
+        for pnode in parsed.nodes:
+            if pnode.parent_id is not None and pnode.parent_id in node_ids:
+                structural_edges.append(
+                    GraphEdge(source_id=pnode.parent_id, target_id=pnode.node_id, type=EdgeType.CONTAINS)
+                )
         # TESTS edges: test file -> probable source file (name heuristic).
         if self._is_test_path(file_path):
             guess = self._guess_source_file(file_path)
