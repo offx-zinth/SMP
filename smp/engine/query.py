@@ -98,12 +98,17 @@ class DefaultQueryEngine:
             return None
         q = query.lower()
 
-        def rank(cand: Any) -> tuple[int, int, int]:
+        def rank(cand: Any) -> tuple[int, int, int, int]:
             cname = ((cand.structural.name or "") if cand.structural else "").lower()
+            # Name equality is the strongest signal, then whether the path
+            # itself names the query (mmap_store -> .../mmap_store.py), which
+            # separates real code from a Markdown section that merely mentions
+            # the term in its heading.
             is_exact = 0 if cname == q else 1
+            path_hit = 0 if q in (cand.file_path or "").lower() else 1
             is_code = 0 if cand.type.value in ("Section", "File", "Config") else 1
             is_test = 1 if (cname.startswith("test_") or "/tests/" in (cand.file_path or "")) else 0
-            return (is_exact, is_code, is_test)
+            return (is_exact, is_code, path_hit, is_test)
 
         return min(candidates, key=rank)
 
@@ -132,13 +137,13 @@ class DefaultQueryEngine:
                 candidates = await self._graph.find_nodes(name=query)
                 node = self._prefer_code_node(candidates, query)
 
-        # If still not found, try partial match on node ID prefix
+        # If still not found, try partial match on node ID prefix. Node IDs embed
+        # the file path and, for Markdown, the section title, so a query
+        # like "mmap_store" matches docs sections too. Rank the hits so the
+        # code file wins instead of whichever Section came first.
         if not node:
-            all_nodes = await self._graph.find_nodes()
-            for n in all_nodes:
-                if n.id.startswith(query) or query in n.id:
-                    node = n
-                    break
+            id_hits = [n for n in await self._graph.find_nodes() if n.id.startswith(query) or query in n.id]
+            node = self._prefer_code_node(id_hits, query)
 
         # BM25 fallback for multi-term queries ("MMapGraphStore upsert").
         if not node and " " in query:

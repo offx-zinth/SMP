@@ -739,10 +739,11 @@ class MMapGraphStore(GraphStore):
             if raw and (raw == name_lower or raw in node.id.lower()):
                 score += 20.0
             elif name_lower and name_lower in lowered_terms:
-                # Single-term query naming the symbol exactly ("GraphNode
-                # model definition"): boost, else long docstrings outrank
-                # the definition itself.
-                score += 12.0
+                # A query term naming the symbol exactly ("GraphNode model
+                # definition"). Must decisively outrank BM25 docstring hits,
+                # which reach ~95 on long prose, so the boost is sized well
+                # above that observed ceiling rather than a token nudge.
+                score += 60.0
             if score > 0:
                 scored.append((score, matched_on or "name", node))
         scored.sort(key=lambda x: -x[0])
