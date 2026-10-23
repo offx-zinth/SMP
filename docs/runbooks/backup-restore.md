@@ -479,5 +479,5 @@ Each record is self-describing and can be skipped by readers that don't understa
 ## References
 
 - Architecture: `ARCHITECTURE.md`
-- API: `API.md`
+- API: run `smp/methods` via MCP, or `smp/protocol/server.py`
 - Settings: `smp/core/config.py`

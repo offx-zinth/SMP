@@ -52,3 +52,6 @@ chroma-data/
 linux-master.zip
 
 Qwen3-Embedding-0.6B-GGUF/
+# per-project SMP graphs (binary, per-machine)
+.smp/
+.cgraphy/
