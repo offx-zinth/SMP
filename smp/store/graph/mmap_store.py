@@ -132,6 +132,12 @@ class MMapGraphStore(GraphStore):
         self._edge_index: dict[str, list[GraphEdge]] = {}
         self._nodes_by_file: dict[str, set[str]] = {}
 
+        # Monotonic node-data revision. Bumped by every node mutation so
+        # derived structures (e.g. the BM25 corpus cache in the query
+        # engine) can detect staleness in O(1). Edge-only mutations do not
+        # affect search text and therefore do not bump it.
+        self.revision: int = 0
+
         self._sessions: dict[str, dict[str, Any]] = {}
         self._locks: dict[str, dict[str, Any]] = {}
         self._audit: list[dict[str, Any]] = []
@@ -197,6 +203,7 @@ class MMapGraphStore(GraphStore):
         self._tx_counter = 0
         self._active_tx_id = None
         self._writes_since_flush = 0
+        self.revision += 1
         await self.connect()
 
     # ------------------------------------------------------------------
@@ -466,6 +473,7 @@ class MMapGraphStore(GraphStore):
 
     async def upsert_node(self, node: GraphNode) -> None:
         self._apply_node_upsert(node)
+        self.revision += 1
         self._append(RecordType.NODE_UPSERT, encode(NodeUpsertPayload(node=node)))
 
     async def upsert_nodes(self, nodes: Sequence[GraphNode]) -> None:
@@ -475,6 +483,7 @@ class MMapGraphStore(GraphStore):
             records.append((RecordType.NODE_UPSERT, encode(NodeUpsertPayload(node=node))))
 
         if records:
+            self.revision += 1
             self._append_batch(records)
 
     async def get_node(self, node_id: str) -> GraphNode | None:
@@ -484,6 +493,7 @@ class MMapGraphStore(GraphStore):
         if node_id not in self._nodes:
             return False
         self._apply_node_delete(node_id)
+        self.revision += 1
         self._append(RecordType.NODE_DELETE, encode(NodeDeletePayload(node_id=node_id)))
         return True
 
@@ -493,6 +503,7 @@ class MMapGraphStore(GraphStore):
             return 0
         count = len(file_ids)
         self._apply_file_delete(file_path)
+        self.revision += 1
         self._append(RecordType.FILE_DELETE, encode(FileDeletePayload(file_path=file_path)))
         return count
 

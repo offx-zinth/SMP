@@ -24,6 +24,10 @@ _LIVE_SNAPSHOTS = frozenset({"", "live", "current"})
 
 _DIFF_ID_CAP = 5000
 
+# One cached BM25 corpus row: (node, full field-token map, query-restricted
+# presence haystack, all-fields presence haystack, weighted doc length).
+_CorpusRow = tuple[GraphNode, dict[str, list[str]], set[str], set[str], float]
+
 
 def _in_scope(file_path: str, scope: str) -> bool:
     """Check whether *file_path* falls under a diff scope prefix."""
@@ -49,6 +53,20 @@ class DefaultQueryEngine:
         self._graph = graph_store
         self._vector_store = vector_store
         self._enricher = enricher
+
+        # BM25 corpus cache for :meth:`locate` / ``locate_paged`` — built once
+        # per store revision (see ``graph.revision``). Holds pre-tokenized
+        # fields plus ready membership sets so repeated queries do not
+        # re-materialize and re-tokenize the whole graph per call (measured:
+        # per-query corpus rebuild was the dominant cost even on 4.5k-node
+        # graphs, and the node materialization alone drove server RSS into
+        # multi-GB territory on 800k-node corpora).
+        # Tuple: (graph id, revision, rows, idf, avgdl); rows are
+        # ``(node, fmap, hay_query, hay_all, length)`` where ``fmap`` covers
+        # rank/locate-restricted fields and the two ``hay`` sets drive
+        # presence checks (query-restricted / all-fields for totals).
+        self._corpus_cache: tuple[int, int, list[_CorpusRow], dict[str, float], float] | None = None
+        self._corpus_cache_max_nodes = 250_000
 
     def _node_to_dict(self, node: GraphNode) -> dict[str, Any]:
         return {
@@ -754,6 +772,107 @@ class DefaultQueryEngine:
             "recommendations": recommendations,
         }
 
+    @staticmethod
+    def _present_terms(terms: list[str], hay: set[str]) -> list[str]:
+        """Distinct query terms present in a token haystack.
+
+        Exact token hits first, substring fallback (``term in token``) for
+        terms without one — the same outcome as the scan path's
+        ``t in hay or any(t in h for h in hay)`` test applied per term.
+        """
+        return [term for term in dict.fromkeys(terms) if term in hay or any(term in h for h in hay)]
+
+    @staticmethod
+    def _locate_hit(node: GraphNode, score: float, matched_on: str | None) -> dict[str, Any]:
+        """Result payload for one locate hit (exact codebase-memory parity keys)."""
+        return {
+            "entity": node.structural.name,
+            "id": node.id,
+            "file": node.file_path,
+            "file_path": node.file_path,
+            "type": node.type.value,
+            "matched_on": matched_on or "name",
+            "docstring": node.semantic.docstring,
+            "tags": list(node.semantic.tags),
+            "signature": node.structural.signature,
+            "start_line": node.structural.start_line,
+            "end_line": node.structural.end_line,
+            "lines": node.structural.lines,
+            "score": round(score, 2),
+        }
+
+    async def _get_corpus_cache(self) -> tuple[list[_CorpusRow], dict[str, float], float] | None:
+        """Return cached ``(rows, idf, avgdl)`` for the unrestricted graph, or ``None``.
+
+        ``rows`` are ``(node, fmap, hay_query, hay_all, length)`` tuples.
+
+        Semantics mirror ``bm25.build_corpus`` + :meth:`locate` +
+        :func:`bm25.rank` exactly: scores come from the full field map
+        (``fmap``), ``locate`` presence checks use the query-restricted
+        haystack (the five fields the scan path exposed), and pagination
+        totals use the all-fields haystack (``hay_all``). The cache
+        invalidates whenever ``graph.revision`` moves or the graph object is
+        replaced. Non-revision stores return ``None``; graphs above
+        ``_corpus_cache_max_nodes`` also return ``None`` but leave an
+        empty-rows sentinel for this revision so the oversized check does not
+        redo the full ``find_nodes()`` on every query — callers then use the
+        classic per-query scan, as before this cache existed.
+        """
+        revision = getattr(self._graph, "revision", None)
+        if revision is None:
+            # Non-revision stores cannot invalidate the cache safely; use the
+            # classic per-query scan instead.
+            return None
+        graph_id = id(self._graph)
+        cached = self._corpus_cache
+        if cached is not None and cached[0] == graph_id and cached[1] == revision:
+            return cached[2], cached[3], cached[4]
+        # Revision mismatch (or first call): drop stale entries before
+        # rebuilding so a failed build can never serve earlier data.
+        self._corpus_cache = None
+
+        all_nodes = await self._graph.find_nodes()
+        if len(all_nodes) > self._corpus_cache_max_nodes:
+            # Oversized graph: cache an empty sentinel keyed on this revision
+            # so the materialization probe runs once per revision, not per query.
+            self._corpus_cache = (graph_id, revision, [], {}, 0.0)
+            return None
+
+        from smp.engine.bm25 import FIELD_WEIGHTS, _field_tokens, idf_map
+
+        rows: list[_CorpusRow] = []
+        doc_freq: dict[str, int] = {}
+        doc_count = max(1, len(all_nodes))
+        for node in all_nodes:
+            fmap = _field_tokens(node)
+            length = 0.0
+            hay_all: set[str] = set()
+            seen: set[str] = set()
+            for field, toks in fmap.items():
+                length += len(toks) * FIELD_WEIGHTS.get(field, 1.0)
+                hay_all.update(toks)
+                seen.update(toks)
+            # Document frequency is counted once per doc over the union of
+            # all fields, exactly like bm25.build_corpus's per-doc ``seen``
+            # set (cross-field token repeats must not inflate df/IDF).
+            for term in seen:
+                doc_freq[term] = doc_freq.get(term, 0) + 1
+            # ``locate`` presence haystack: the five fields the scan path
+            # exposed (requested fields ∪ {name, id, file_path}); totals in
+            # locate_paged use the all-fields set instead.
+            hay_query: set[str] = set()
+            for field in ("name", "docstring", "tags", "id", "file_path"):
+                hay_query.update(fmap.get(field, ()))
+            rows.append((node, fmap, hay_query, hay_all, length))
+
+        idf = idf_map(doc_freq, doc_count)
+        # Raw-length average mirrors build_corpus: empty docs keep 0.0 here;
+        # the ``or 1.0`` doc-length floor is applied where score_node is
+        # called, exactly as the scan path does.
+        avgdl = (sum(row[4] for row in rows) / max(1, len(rows))) or 1.0
+        self._corpus_cache = (graph_id, revision, rows, idf, avgdl)
+        return rows, idf, avgdl
+
     async def locate(
         self,
         query: str,
@@ -763,23 +882,73 @@ class DefaultQueryEngine:
         offset: int = 0,
         match: str = "any",
     ) -> list[dict[str, Any]]:
-        from smp.engine.bm25 import build_corpus, score_node, tokenize_query
+        from smp.engine.bm25 import score_node, tokenize_query
 
         if not fields:
             fields = ["name", "docstring", "tags"]
+        use_field_set = set(fields) | {"name", "id", "file_path"}
 
+        # Fast path: the default field set over the whole graph served from
+        # the warm corpus cache (see :meth:`_get_corpus_cache`). Scoring and
+        # presence semantics are identical to the classic scan below — the
+        # cache only removes the per-query find_nodes() + build_corpus()
+        # rebuild, which measured 1.5 s p50 per smp_locate call on a
+        # 4.5k-node graph. Type-filtered or custom-field queries, oversized
+        # graphs, and non-revision stores fall through to the scan.
+        if (
+            not node_types
+            and fields == ["name", "docstring", "tags"]
+            and use_field_set == {"name", "docstring", "tags", "id", "file_path"}
+        ):
+            cached = await self._get_corpus_cache()
+            if cached is not None and cached[0]:
+                rows, idf, avgdl = cached
+                terms = tokenize_query(query) or [t.lower() for t in query.split() if t]
+                if not terms:
+                    return []
+                distinct = list(dict.fromkeys(terms))
+                raw = query.lower()
+                scored: list[tuple[float, dict[str, Any]]] = []
+                for node, fmap, hay_query, _hay_all, length in rows:
+                    # Presence per term: exact token hit first, substring
+                    # fallback for terms without one — the same result as the
+                    # scan's "t in hay or any(t in h)" test per term.
+                    present = self._present_terms(distinct, hay_query)
+                    if match == "all" and len(present) < len(distinct):
+                        continue
+                    if not present:
+                        continue
+                    score, matched_on = score_node(terms, fmap, idf, avgdl, length or 1.0)
+                    if raw == node.structural.name.lower():
+                        score += 100.0
+                        matched_on = "name (exact)"
+                    if score > 0:
+                        scored.append((score, self._locate_hit(node, score, matched_on)))
+                scored.sort(key=lambda x: -x[0])
+                page = scored[offset : offset + top_k] if top_k > 0 else scored[offset:]
+                return [hit for _score, hit in page]
+            # Empty cache (sentinel for an oversized graph): fall through to
+            # the classic scan below.
+
+        # Classic scan: query-time corpus build, as before the cache existed
+        # (kept verbatim so behavior is unchanged for every non-fast case).
         all_nodes = await self._graph.find_nodes()
         candidates = [n for n in all_nodes if not node_types or n.type.value in node_types]
         terms = tokenize_query(query) or [t.lower() for t in query.split() if t]
         if not terms or not candidates:
             return []
 
+        from smp.engine.bm25 import build_corpus
+
         doc_fields, idf, avgdl = build_corpus(candidates)
-        scored: list[tuple[float, dict[str, Any]]] = []
+        # Same shape as the fast path's ``scored``; no re-annotation so mypy
+        # sees a single binding for the method.
+        scored = []
         for node, fmap in zip(candidates, doc_fields, strict=True):
-            # Restrict to requested fields when possible.
+            # Restrict the presence haystack to requested fields ∪ {name,
+            # id, file_path}; scoring still uses the full field map.
             hay_tokens: set[str] = set()
-            use_fields = {k: v for k, v in fmap.items() if k in set(fields) | {"name", "id", "file_path"}}
+            use_fields = {k: v for k, v in fmap.items() if k in use_field_set}
             for toks in use_fields.values():
                 hay_tokens.update(toks)
             present = [t for t in terms if t in hay_tokens or any(t in h for h in hay_tokens)]
@@ -794,30 +963,11 @@ class DefaultQueryEngine:
                 score += 100.0
                 matched_on = "name (exact)"
             if score > 0:
-                scored.append(
-                    (
-                        score,
-                        {
-                            "entity": node.structural.name,
-                            "id": node.id,
-                            "file": node.file_path,
-                            "file_path": node.file_path,
-                            "type": node.type.value,
-                            "matched_on": matched_on or "name",
-                            "docstring": node.semantic.docstring,
-                            "tags": list(node.semantic.tags),
-                            "signature": node.structural.signature,
-                            "start_line": node.structural.start_line,
-                            "end_line": node.structural.end_line,
-                            "lines": node.structural.lines,
-                            "score": round(score, 2),
-                        },
-                    )
-                )
+                scored.append((score, self._locate_hit(node, score, matched_on)))
 
         scored.sort(key=lambda x: -x[0])
         page = scored[offset : offset + top_k] if top_k > 0 else scored[offset:]
-        return [item[1] for item in page]
+        return [hit for _score, hit in page]
 
     async def locate_paged(
         self,
@@ -828,7 +978,52 @@ class DefaultQueryEngine:
         offset: int = 0,
         match: str = "any",
     ) -> dict[str, Any]:
-        """Locate with pagination metadata (codebase-memory parity)."""
+        """Locate with pagination metadata (codebase-memory parity).
+
+        On the default-field fast path the page comes from :meth:`locate`
+        (warm cache) and ``total`` is computed from the same cached rows
+        using the all-fields presence semantics of ``bm25.rank`` — exactly
+        what ``count_matches`` produces for the classic path, minus its
+        second full-graph materialization and corpus rebuild.
+        """
+        if not node_types and (not fields or fields == ["name", "docstring", "tags"]):
+            from smp.engine.bm25 import score_node, tokenize_query
+
+            cached = await self._get_corpus_cache()
+            if cached is not None and cached[0]:
+                rows, idf, avgdl = cached
+                terms = tokenize_query(query) or [t.lower() for t in query.split() if t]
+                raw = query.lower()
+                # Total mirrors bm25.rank()/count_matches exactly over the
+                # all-fields haystack: presence/match filter, the +20 phrase
+                # bonus (raw == name, or raw substring of id), score > 0 gate.
+                total = 0
+                if terms:
+                    distinct = list(dict.fromkeys(terms))
+                    for node, fmap, _hay_query, hay_all, length in rows:
+                        present = self._present_terms(distinct, hay_all)
+                        if match == "all" and len(present) < len(distinct):
+                            continue
+                        if not present:
+                            continue
+                        score, _matched_on = score_node(terms, fmap, idf, avgdl, length or 1.0)
+                        if raw and (raw == node.structural.name.lower() or raw in node.id.lower()):
+                            score += 20.0
+                        if score > 0:
+                            total += 1
+                matches = await self.locate(query, fields, node_types, top_k, offset, match)
+                has_more = offset + len(matches) < total
+                return {
+                    "matches": matches,
+                    "total": total,
+                    "returned": len(matches),
+                    "offset": offset,
+                    "has_more": has_more,
+                    "next_offset": offset + len(matches) if has_more else None,
+                }
+
+        # Classic path: full rank() pass for the total, then locate (verbatim
+        # pre-cache behavior for custom fields/types / oversized graphs).
         from smp.engine.bm25 import count_matches
 
         all_nodes = await self._graph.find_nodes()
