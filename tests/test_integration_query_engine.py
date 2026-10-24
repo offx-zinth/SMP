@@ -183,6 +183,36 @@ class TestTrace:
         assert "func_b" in names
         assert "func_c" in names
 
+    async def test_reach_labels_callers_and_callees(self, seeded_engine: DefaultQueryEngine) -> None:
+        result = await seeded_engine.trace("file.py::Function::func_b::10", "CALLS", depth=1, direction="both")
+        by_name = {n["name"]: n["reach"] for n in result}
+        assert by_name["func_b"] == "self"
+        assert by_name["func_a"] == "caller"
+        assert by_name["func_c"] == "callee"
+
+    async def test_both_excludes_callee_siblings(self, clean_graph: MMapGraphStore) -> None:
+        # sib_a and sib_b share helper h. Tracing sib_a with direction=both
+        # must report h as a callee and must NOT report sib_b (a mixed
+        # out-then-in walk is neither a caller nor a callee).
+        helper = _node("sib.py::Function::h::1", NodeType.FUNCTION, "h", "sib.py", 1, 3)
+        sib_a = _node("sib.py::Function::sib_a::5", NodeType.FUNCTION, "sib_a", "sib.py", 5, 7)
+        sib_b = _node("sib.py::Function::sib_b::9", NodeType.FUNCTION, "sib_b", "sib.py", 9, 11)
+        await clean_graph.upsert_nodes([helper, sib_a, sib_b])
+        await clean_graph.upsert_edges(
+            [
+                GraphEdge(source_id=sib_a.id, target_id=helper.id, type=EdgeType.CALLS),
+                GraphEdge(source_id=sib_b.id, target_id=helper.id, type=EdgeType.CALLS),
+            ]
+        )
+        engine = DefaultQueryEngine(clean_graph)
+        result = await engine.trace("sib_a", "CALLS", depth=3, direction="both")
+        names = {n["name"] for n in result}
+        assert "h" in names
+        assert "sib_b" not in names
+        by_name = {n["name"]: n["reach"] for n in result}
+        assert by_name["h"] == "callee"
+        assert by_name["sib_a"] == "self"
+
 
 # ---------------------------------------------------------------------------
 # get_context()
@@ -270,6 +300,72 @@ class TestFindFlow:
         result = await seeded_engine.find_flow("file.py::Function::func_a::4", "file.py::Function::func_b::10")
         path_names = [n["node"] for n in result["path"]]
         assert "func_a" in path_names or "file.py::Function::func_a::4" in path_names
+
+    async def test_forward_hops_follow_edge_direction(self, seeded_engine: DefaultQueryEngine) -> None:
+        result = await seeded_engine.find_flow("file.py::Function::func_a::4", "file.py::Function::func_c::16")
+        assert result["direction"] == "outgoing"
+        assert len(result["hops"]) == 2
+        assert all(h["orientation"] == "forward" for h in result["hops"])
+        assert result["hops"][0] == {
+            "from": "func_a",
+            "to": "func_b",
+            "edge_type": "CALLS",
+            "orientation": "forward",
+        }
+        assert result["data_transformations"] == ["func_a → func_b", "func_b → func_c"]
+
+    async def test_reverse_hops_marked_not_flipped(self, seeded_engine: DefaultQueryEngine) -> None:
+        # Stored edges run func_a → func_b → func_c; asking callee → caller
+        # must report reverse orientation, never a fake forward path.
+        result = await seeded_engine.find_flow("file.py::Function::func_c::16", "file.py::Function::func_a::4")
+        assert result["direction"] == "incoming"
+        assert len(result["hops"]) == 2
+        assert all(h["orientation"] == "reverse" for h in result["hops"])
+        assert result["hops"][0]["from"] == "func_c"
+        assert result["hops"][0]["to"] == "func_b"
+        assert any("←" in t and "reverse CALLS" in t for t in result["data_transformations"])
+        assert "traversal_note" in result
+
+
+# ---------------------------------------------------------------------------
+# dead_code()
+# ---------------------------------------------------------------------------
+
+
+class TestDeadCode:
+    async def test_skips_subclassed_and_flags_unused(self, clean_graph: MMapGraphStore) -> None:
+        sub = _node(
+            "d.py::Class::Sub::1",
+            NodeType.CLASS,
+            "Sub",
+            "d.py",
+            1,
+            10,
+            signature="class Sub(Base)",
+        )
+        plain = _node("d.py::Class::Plain::12", NodeType.CLASS, "Plain", "d.py", 12, 15, signature="class Plain")
+        unused = _node("d.py::Function::unused::20", NodeType.FUNCTION, "unused", "d.py", 20, 22)
+        used = _node("d.py::Function::used::25", NodeType.FUNCTION, "used", "d.py", 25, 27)
+        caller = _node("d.py::Function::caller::30", NodeType.FUNCTION, "caller", "d.py", 30, 32)
+        method = _node("d.py::Function::helper::5", NodeType.FUNCTION, "helper", "d.py", 5, 7)
+        await clean_graph.upsert_nodes([sub, plain, unused, used, caller, method])
+        await clean_graph.upsert_edges(
+            [
+                GraphEdge(source_id=caller.id, target_id=used.id, type=EdgeType.CALLS),
+                GraphEdge(source_id=sub.id, target_id=method.id, type=EdgeType.CONTAINS),
+            ]
+        )
+        engine = DefaultQueryEngine(clean_graph)
+        result = await engine.dead_code(top_k=50)
+        names = {n["name"] for n in result["nodes"]}
+        # Declared bases = polymorphic use -> skipped.
+        assert "Sub" not in names
+        # CONTAINS (containment) is not usage -> still flagged.
+        assert "helper" in names
+        assert "unused" in names
+        assert "Plain" in names
+        assert "used" not in names
+        assert "caller" not in names
 
 
 # ---------------------------------------------------------------------------

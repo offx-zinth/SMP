@@ -304,5 +304,5 @@ Before submitting a Pull Request, ensure you have completed these steps. Pull Re
 4. [ ] `mypy smp/` — Zero type errors.
 5. [ ] `pytest` — All tests pass, including mmap store and query engine integration tests.
 
-For detailed agent-specific interactions and JSON-RPC payloads, refer to `PROTOCOL.md` spec.
+For detailed agent-specific interactions and JSON-RPC payloads, see `SPEC.md` and the `smp/methods` tool.
 ```

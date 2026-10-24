@@ -218,6 +218,9 @@ _EXPLICIT_TOOL_METHODS: set[str] = {
     "smp/coverage",
     "smp/dead_code",
     "smp/flow",
+    "smp/query",
+    "smp/code_snippet",
+    "smp/detect_changes",
     "smp/update",
     "smp/batch_update",
     "smp/reindex",
@@ -392,6 +395,34 @@ async def smp_dead_code(top_k: int = 50, ctx: Any = None) -> str:
 @mcp.tool(description="Find paths or flows between entities")
 async def smp_flow(start: str, end: str, flow_type: str = "data", ctx: Any = None) -> str:
     result = await _call_rpc("smp/flow", {"start": start, "end": end, "flow_type": flow_type}, ctx)
+    return _json.dumps(result, default=str, indent=2)
+
+
+@mcp.tool(description="Read-only Cypher-subset graph query with pagination and timing")
+async def smp_query(query: str, max_rows: int = 200, offset: int = 0, ctx: Any = None) -> str:
+    result = await _call_rpc("smp/query", {"query": query, "max_rows": max_rows, "offset": offset}, ctx)
+    return _json.dumps(result, default=str, indent=2)
+
+
+@mcp.tool(description="Read exact symbol source with caller/callee counts")
+async def smp_code_snippet(
+    qualified_name: str, source_mode: str = "auto", max_lines: int = 500, ctx: Any = None
+) -> str:
+    result = await _call_rpc(
+        "smp/code_snippet", {"qualified_name": qualified_name, "source_mode": source_mode, "max_lines": max_lines}, ctx
+    )
+    return _json.dumps(result, default=str, indent=2)
+
+
+@mcp.tool(description="Map a Git diff to files and impact")
+async def smp_detect_changes(
+    base_branch: str = "main", depth: int = 1, direction: str = "both", limit: int = 50, ctx: Any = None
+) -> str:
+    result = await _call_rpc(
+        "smp/detect_changes",
+        {"base_branch": base_branch, "depth": depth, "direction": direction, "limit": limit},
+        ctx,
+    )
     return _json.dumps(result, default=str, indent=2)
 
 

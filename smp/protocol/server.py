@@ -110,6 +110,9 @@ _HANDLERS: dict[str, HandlerFn] = {
     "smp/dead_code": query_handlers.dead_code,
     "smp/semantic_search": query_handlers.semantic_search,
     "smp/flow": query_handlers.flow,
+    "smp/query": query_handlers.query,
+    "smp/code_snippet": query_handlers.code_snippet,
+    "smp/detect_changes": query_handlers.detect_changes,
     # Memory management
     "smp/update": memory_handlers.update,
     "smp/batch_update": memory_handlers.batch_update,

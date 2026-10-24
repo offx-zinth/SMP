@@ -82,6 +82,11 @@ def _field_tokens(node: Any) -> dict[str, list[str]]:
     }
 
 
+def idf_map(doc_freq: dict[str, int], doc_count: int) -> dict[str, float]:
+    """Okapi IDF from a document-frequency map (shared by all ranking paths)."""
+    return {term: math.log((doc_count - df + 0.5) / (df + 0.5) + 1.0) for term, df in doc_freq.items()}
+
+
 def build_corpus(nodes: list[Any]) -> tuple[list[dict[str, list[str]]], dict[str, float], float]:
     """Pre-compute per-doc field tokens, IDF map, and average doc length.
 
@@ -102,7 +107,7 @@ def build_corpus(nodes: list[Any]) -> tuple[list[dict[str, list[str]]], dict[str
         lengths.append(length)
         for term in seen:
             doc_freq[term] = doc_freq.get(term, 0) + 1
-    idf = {t: math.log((doc_count - df + 0.5) / (df + 0.5) + 1.0) for t, df in doc_freq.items()}
+    idf = idf_map(doc_freq, doc_count)
     avgdl = sum(lengths) / max(1, len(lengths)) or 1.0
     return doc_fields, idf, avgdl
 

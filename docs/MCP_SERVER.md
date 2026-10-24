@@ -267,4 +267,4 @@ When adding new tools:
 
 - MCP Specification: https://modelcontextprotocol.io
 - FastMCP Documentation: https://github.com/modelcontextprotocol/python-sdk
-- SMP Protocol: See PROTOCOL.md
+- SMP Protocol: See SPEC.md and docs/MCP_SERVER.md

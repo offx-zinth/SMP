@@ -506,6 +506,35 @@ class FlowParams(msgspec.Struct):
     flow_type: str = "data"
 
 
+class QueryParams(msgspec.Struct):
+    """Parameters for smp/query — read-only graph query (query_graph parity)."""
+
+    query: str = ""
+    node_type: str | None = None
+    name_pattern: str | None = None
+    file_pattern: str | None = None
+    max_rows: int = 200
+    offset: int = 0
+
+
+class CodeSnippetParams(msgspec.Struct):
+    """Parameters for smp/code_snippet — get_code_snippet parity."""
+
+    qualified_name: str = ""
+    source_mode: str = "auto"
+    max_lines: int = 500
+
+
+class DetectChangesParams(msgspec.Struct):
+    """Parameters for smp/detect_changes — git-aware detect_changes parity."""
+
+    base_branch: str = "main"
+    depth: int = 1
+    direction: str = "both"
+    limit: int = 50
+    scope: str = "files"
+
+
 # ---------------------------------------------------------------------------
 # SMP(3) Runtime Models
 # ---------------------------------------------------------------------------

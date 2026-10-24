@@ -1,0 +1,49 @@
+name: install-smoke
+
+# Keeps the one-line installer honest: curl | bash must keep working and
+# wiring configs on both supported platforms.
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: bash syntax check
+        run: bash -n install.sh
+
+      - name: install (global scope, non-interactive default)
+        env:
+          PIP_CACHE_DIR: ${{ runner.temp }}/pip
+        run: bash install.sh --global
+
+      - name: CLI works
+        run: '"$HOME/.local/bin/smp" --help'
+
+      - name: idempotent rerun
+        env:
+          PIP_CACHE_DIR: ${{ runner.temp }}/pip
+        run: bash install.sh --global
+
+      - name: skill installed
+        run: test -f "$HOME/.agents/skills/smp/SKILL.md"
+
+      - name: uninstall is clean
+        run: bash install.sh --global --uninstall
+
+      - name: nothing left behind
+        run: |
+          test ! -f "$HOME/.local/bin/smp"
+          test ! -d "$HOME/.smp"

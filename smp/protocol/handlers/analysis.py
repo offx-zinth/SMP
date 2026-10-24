@@ -15,6 +15,7 @@ import msgspec
 from smp.core.models import (
     ConflictParams,
     DiffParams,
+    EdgeType,
     PlanParams,
     TelemetryHotParams,
     TelemetryNodeParams,
@@ -56,25 +57,56 @@ async def why(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str, Any]:
     return await engine.why(p.entity, p.relationship, p.depth)  # type: ignore[no-any-return]
 
 
+# Incoming edge types that represent a real use/call of the node, as
+# opposed to fuzzy name-mention links (REFERENCES) from placeholder
+# resolution. Hotspot ranking uses this code degree; inflated in_degree
+# on generic names (close/connect) is almost entirely REFERENCES.
+_CODE_IN_TYPES = frozenset({EdgeType.CALLS, EdgeType.CALLS_RUNTIME, EdgeType.INHERITS, EdgeType.IMPLEMENTS})
+
+
+async def _code_in_degree(graph: Any, node_id: str) -> tuple[int, int]:
+    """Return ``(code_in, references_in)`` for one node.
+
+    Single bounded edge-index lookup — O(edges of the node). Falls back
+    to ``(0, 0)`` when the store cannot enumerate edges.
+    """
+    try:
+        edges_in = await graph.get_edges(node_id, direction="incoming")
+    except (TypeError, NotImplementedError, AttributeError):
+        return 0, 0
+    code_in = sum(1 for e in edges_in or [] if e.type in _CODE_IN_TYPES)
+    references_in = sum(1 for e in edges_in or [] if e.type == EdgeType.REFERENCES)
+    return code_in, references_in
+
+
 async def _hot_nodes(graph: Any, threshold: int, top_k: int) -> list[dict[str, Any]]:
-    """Compute the highest-degree nodes for telemetry summaries."""
+    """Compute the highest-degree nodes for telemetry summaries.
+
+    Ranked by code degree (real calls/inheritance + outgoing), not raw
+    degree, so fuzzy REFERENCES fan-out cannot crown generic names.
+    Total work is O(nodes + edges): one bounded lookup per node.
+    """
     nodes = await graph.find_nodes()
     scored: list[tuple[int, dict[str, Any]]] = []
     for node in nodes:
         in_deg, out_deg = await graph.get_node_degree(node.id)
-        degree = in_deg + out_deg
-        if degree >= threshold:
+        code_in, references_in = await _code_in_degree(graph, node.id)
+        code_degree = code_in + out_deg
+        if code_degree >= threshold or in_deg + out_deg >= threshold:
             scored.append(
                 (
-                    degree,
+                    code_degree,
                     {
                         "node_id": node.id,
                         "name": node.structural.name,
                         "file": node.file_path,
                         "type": node.type.value,
-                        "degree": degree,
+                        "degree": code_degree,
+                        "raw_degree": in_deg + out_deg,
                         "in_degree": in_deg,
                         "out_degree": out_deg,
+                        "code_in_degree": code_in,
+                        "references_in_degree": references_in,
                     },
                 )
             )
@@ -120,6 +152,8 @@ async def telemetry_hot(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str
 
     in_deg, out_deg = await graph.get_node_degree(p.node_id)
     degree = in_deg + out_deg
+    code_in, references_in = await _code_in_degree(graph, p.node_id)
+    code_degree = code_in + out_deg
     return {
         "node_id": p.node_id,
         "name": node.structural.name,
@@ -127,7 +161,17 @@ async def telemetry_hot(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str
         "in_degree": in_deg,
         "out_degree": out_deg,
         "degree": degree,
+        "code_in_degree": code_in,
+        "references_in_degree": references_in,
+        "code_degree": code_degree,
         "is_hot": degree > 10 or node.structural.complexity > 8,
+        "is_hot_code": code_degree > 10 or node.structural.complexity > 8,
+        "degree_note": (
+            "in_degree counts every edge type, including fuzzy REFERENCES "
+            "from name-based placeholder resolution; code_in_degree counts "
+            "only CALLS/CALLS_RUNTIME/INHERITS/IMPLEMENTS. Prefer code_degree "
+            "for hotspot judgments."
+        ),
         "complexity": node.structural.complexity,
     }
 
@@ -293,9 +337,9 @@ async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
         if is_test:
             continue
         # Real entry points: mains/CLIs, not dunders, wrappers, or registry fns.
-        # NOTE: File DEFINES edges give every symbol in_deg >= 1, so the
-        # caller check uses incoming CALLS edges (real callers), not total
-        # degree — otherwise DEFINES would suppress all entry points.
+        # NOTE: DEFINES/CONTAINS/REFERENCES edges give every symbol in_deg >= 1,
+        # so the caller check uses only real code callers (see _CODE_IN_TYPES),
+        # not total degree — otherwise structural edges suppress all of them.
         if (
             node.type.value in ("Function", "Class")
             and out_deg > 0
@@ -310,7 +354,11 @@ async def architecture(params: dict[str, Any], ctx: dict[str, Any]) -> dict[str,
                 incoming = await graph.get_edges(node.id, direction="incoming")
             except (NotImplementedError, AttributeError):
                 incoming = []
-            real_callers = [e for e in incoming if e.type.value != "DEFINES"]
+            # Only a real code caller disqualifies an entry point. DEFINES
+            # (file/scope ownership), CONTAINS (structural nesting) and
+            # REFERENCES (fuzzy name mention) must all be ignored, otherwise
+            # every symbol inherits at least one and the list comes back empty.
+            real_callers = [e for e in incoming if e.type in _CODE_IN_TYPES]
             if not real_callers:
                 entry_points.append({"node_id": node.id, "name": node.structural.name, "file": node.file_path})
     scored.sort(key=lambda d: d["degree"], reverse=True)

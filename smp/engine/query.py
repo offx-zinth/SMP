@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Any
 
-from smp.core.models import EdgeType, GraphNode, NodeType
+from smp.core.models import EdgeType, GraphEdge, GraphNode, NodeType
 from smp.engine.bm25 import FIELD_WEIGHTS as _BM25_WEIGHTS
 from smp.logging import get_logger
 from smp.store.graph.parser import CodeParser
@@ -23,6 +23,10 @@ _UTILITY_PATH_SEGMENTS = {"/utils", "/lib", "/shared", "/helpers"}
 _LIVE_SNAPSHOTS = frozenset({"", "live", "current"})
 
 _DIFF_ID_CAP = 5000
+
+# One cached BM25 corpus row: (node, full field-token map, query-restricted
+# presence haystack, all-fields presence haystack, weighted doc length).
+_CorpusRow = tuple[GraphNode, dict[str, list[str]], set[str], set[str], float]
 
 
 def _in_scope(file_path: str, scope: str) -> bool:
@@ -49,6 +53,20 @@ class DefaultQueryEngine:
         self._graph = graph_store
         self._vector_store = vector_store
         self._enricher = enricher
+
+        # BM25 corpus cache for :meth:`locate` / ``locate_paged`` — built once
+        # per store revision (see ``graph.revision``). Holds pre-tokenized
+        # fields plus ready membership sets so repeated queries do not
+        # re-materialize and re-tokenize the whole graph per call (measured:
+        # per-query corpus rebuild was the dominant cost even on 4.5k-node
+        # graphs, and the node materialization alone drove server RSS into
+        # multi-GB territory on 800k-node corpora).
+        # Tuple: (graph id, revision, rows, idf, avgdl); rows are
+        # ``(node, fmap, hay_query, hay_all, length)`` where ``fmap`` covers
+        # rank/locate-restricted fields and the two ``hay`` sets drive
+        # presence checks (query-restricted / all-fields for totals).
+        self._corpus_cache: tuple[int, int, list[_CorpusRow], dict[str, float], float] | None = None
+        self._corpus_cache_max_nodes = 250_000
 
     def _node_to_dict(self, node: GraphNode) -> dict[str, Any]:
         return {
@@ -86,6 +104,32 @@ class DefaultQueryEngine:
         except (OSError, ValueError):
             return ""
 
+    @staticmethod
+    def _prefer_code_node(candidates: list[Any], query: str) -> Any | None:
+        """Pick the most useful node from name-match candidates.
+
+        Markdown sections and test nodes are indexed alongside real code, so
+        the first row is often a docs heading that merely mentions the name.
+        Rank by exact name match first, then by code-over-docs/test.
+        """
+        if not candidates:
+            return None
+        q = query.lower()
+
+        def rank(cand: Any) -> tuple[int, int, int, int]:
+            cname = ((cand.structural.name or "") if cand.structural else "").lower()
+            # Name equality is the strongest signal, then whether the path
+            # itself names the query (mmap_store -> .../mmap_store.py), which
+            # separates real code from a Markdown section that merely mentions
+            # the term in its heading.
+            is_exact = 0 if cname == q else 1
+            path_hit = 0 if q in (cand.file_path or "").lower() else 1
+            is_code = 0 if cand.type.value in ("Section", "File", "Config") else 1
+            is_test = 1 if (cname.startswith("test_") or "/tests/" in (cand.file_path or "")) else 0
+            return (is_exact, is_code, path_hit, is_test)
+
+        return min(candidates, key=rank)
+
     async def navigate(self, query: str, include_relationships: bool = True) -> dict[str, Any]:
         node = await self._graph.get_node(query)
 
@@ -105,18 +149,19 @@ class DefaultQueryEngine:
                         if candidates:
                             node = candidates[0]
             else:
-                # Try finding by name
+                # Try finding by name. Docs sections are indexed too, so
+                # prefer a code node and an exact name match over whatever
+                # "mmap_store" happens to hit first in the node table.
                 candidates = await self._graph.find_nodes(name=query)
-                if candidates:
-                    node = candidates[0]
+                node = self._prefer_code_node(candidates, query)
 
-        # If still not found, try partial match on node ID prefix
+        # If still not found, try partial match on node ID prefix. Node IDs embed
+        # the file path and, for Markdown, the section title, so a query
+        # like "mmap_store" matches docs sections too. Rank the hits so the
+        # code file wins instead of whichever Section came first.
         if not node:
-            all_nodes = await self._graph.find_nodes()
-            for n in all_nodes:
-                if n.id.startswith(query) or query in n.id:
-                    node = n
-                    break
+            id_hits = [n for n in await self._graph.find_nodes() if n.id.startswith(query) or query in n.id]
+            node = self._prefer_code_node(id_hits, query)
 
         # BM25 fallback for multi-term queries ("MMapGraphStore upsert").
         if not node and " " in query:
@@ -193,7 +238,49 @@ class DefaultQueryEngine:
         start_id = await self._resolve_node_id(start)
         if start_id is None:
             return []
-        nodes = await self._graph.traverse(start_id, et, depth, max_nodes=max_nodes, direction=norm_direction)
+        edge_types: EdgeType | list[EdgeType] = et
+        start_node = await self._graph.get_node(start_id)
+        if start_node is not None and start_node.type == NodeType.CLASS and et == EdgeType.CALLS:
+            # Classes own no CALLS edges — their methods do. Expand through
+            # CONTAINS so tracing a Class reaches its members' calls.
+            edge_types = [EdgeType.CALLS, EdgeType.CONTAINS]
+        # Reach label per node: "self" | "caller" | "callee" | "both".
+        reach: dict[str, str] = {start_id: "self"}
+        if norm_direction == "both":
+            # Two capped single-direction traverses instead of one mixed
+            # walk: a callee-sibling (out-then-in via a shared helper) is
+            # neither a caller nor a callee, so it appears in neither set
+            # rather than being mislabelled. Cost is 2x capped BFS.
+            incoming_nodes = await self._graph.traverse(
+                start_id, edge_types, depth, max_nodes=max_nodes, direction="incoming"
+            )
+            outgoing_nodes = await self._graph.traverse(
+                start_id, edge_types, depth, max_nodes=max_nodes, direction="outgoing"
+            )
+            incoming_ids = {n.id for n in incoming_nodes}
+            outgoing_ids = {n.id for n in outgoing_nodes}
+            merged: dict[str, GraphNode] = {}
+            for n in incoming_nodes:
+                merged.setdefault(n.id, n)
+            for n in outgoing_nodes:
+                merged.setdefault(n.id, n)
+            for nid in incoming_ids:
+                if nid != start_id:
+                    reach[nid] = "both" if nid in outgoing_ids else "caller"
+            for nid in outgoing_ids:
+                if nid != start_id and nid not in reach:
+                    reach[nid] = "callee"
+            nodes = [merged[start_id]] if start_id in merged else []
+            nodes.extend(merged[n.id] for n in incoming_nodes if n.id != start_id)
+            nodes.extend(merged[n.id] for n in outgoing_nodes if n.id != start_id and n.id not in incoming_ids)
+        else:
+            nodes = await self._graph.traverse(
+                start_id, edge_types, depth, max_nodes=max_nodes, direction=norm_direction
+            )
+            default_reach = "caller" if norm_direction == "incoming" else "callee"
+            for n in nodes:
+                if n.id != start_id:
+                    reach[n.id] = default_reach
         filtered: list[GraphNode] = []
         for n in nodes:
             if not include_tests and self._is_test_node(n):
@@ -203,6 +290,7 @@ class DefaultQueryEngine:
         result: list[dict[str, Any]] = []
         for hop, n in enumerate(page):
             payload = self._node_to_dict(n)
+            payload["reach"] = reach.get(n.id, "callee" if norm_direction == "outgoing" else "caller")
             if include_evidence or risk_labels:
                 try:
                     outs = await self._graph.get_edges(n.id, direction="outgoing")
@@ -282,34 +370,17 @@ class DefaultQueryEngine:
                 pool = filtered or candidates
                 if len(pool) == 1:
                     return pool[0].id
-                # Most-connected wins among the filtered pool.
-                best = pool[0]
-                best_count = -1
-                for candidate in sorted(pool, key=lambda n: n.file_path):
-                    outgoing = await self._graph.get_edges(candidate.id, direction="outgoing")
-                    incoming = await self._graph.get_edges(candidate.id, direction="incoming")
-                    count = len(outgoing) + len(incoming)
-                    if count > best_count:
-                        best_count = count
-                        best = candidate
-                return best.id
+                # Most-connected code node wins among the filtered pool.
+                return await self._best_candidate(pool)
 
         # Find all nodes with matching name
         candidates = await self._graph.find_nodes(name=query)
         if candidates:
-            # If multiple candidates, prefer the one with most connections (edges),
-            # then use deterministic file path ordering as tiebreaker
+            # If multiple candidates, prefer code over docs (a markdown
+            # Section heading must never beat a real Class/Function), then
+            # the most-connected node, then deterministic file path order.
             if len(candidates) > 1:
-                best_candidate = candidates[0]
-                best_count = -1
-                for candidate in sorted(candidates, key=lambda n: n.file_path):
-                    outgoing = await self._graph.get_edges(candidate.id, direction="outgoing")
-                    incoming = await self._graph.get_edges(candidate.id, direction="incoming")
-                    count = len(outgoing) + len(incoming)
-                    if count > best_count:
-                        best_count = count
-                        best_candidate = candidate
-                return best_candidate.id
+                return await self._best_candidate(candidates)
             return candidates[0].id
 
         if "/" in query:
@@ -321,6 +392,44 @@ class DefaultQueryEngine:
             if node.id.startswith(query) or query in node.id:
                 return node.id
         return None
+
+    async def _best_candidate(self, pool: list[GraphNode]) -> str:
+        """Pick the best node from same-name candidates, precisely.
+
+        Rank: code types (Function/Class/Method) outrank docs and files, so
+        a markdown ``Section`` heading can never shadow a real definition;
+        then most-connected wins; then deterministic file path order.
+        Costs O(C log C) in candidate count, plus one bounded edge lookup
+        per candidate.
+        """
+        code_types = {"function", "class", "method"}
+
+        def rank(n: GraphNode) -> tuple[int, int, str]:
+            return (0 if n.type.value.lower() in code_types else 1, 0, n.file_path)
+
+        best = min(pool, key=rank)
+        if best.type.value.lower() not in code_types:
+            # No code node in the pool: fall back to most-connected.
+            best_count = -1
+            for candidate in sorted(pool, key=lambda n: n.file_path):
+                outgoing = await self._graph.get_edges(candidate.id, direction="outgoing")
+                incoming = await self._graph.get_edges(candidate.id, direction="incoming")
+                count = len(outgoing) + len(incoming)
+                if count > best_count:
+                    best_count = count
+                    best = candidate
+            return best.id
+        best_count = -1
+        for candidate in sorted(pool, key=lambda n: n.file_path):
+            if candidate.type.value.lower() not in code_types:
+                continue
+            outgoing = await self._graph.get_edges(candidate.id, direction="outgoing")
+            incoming = await self._graph.get_edges(candidate.id, direction="incoming")
+            count = len(outgoing) + len(incoming)
+            if count > best_count:
+                best_count = count
+                best = candidate
+        return best.id
 
     async def get_context(
         self,
@@ -611,37 +720,158 @@ class DefaultQueryEngine:
         if not node:
             return {"error": f"Node {entity} not found"}
 
-        impact_edge_types = [EdgeType.CALLS, EdgeType.IMPORTS, EdgeType.DEFINES]
+        # Blast radius = real code users only. DEFINES/CONTAINS are
+        # structural ownership, and REFERENCES are fuzzy name mentions;
+        # counting them made every symbol look "low severity" because a
+        # file node always DEFINES it. Soft links are reported separately.
+        impact_edge_types = [EdgeType.CALLS, EdgeType.CALLS_RUNTIME, EdgeType.IMPORTS, EdgeType.INHERITS]
         dependents = await self._graph.traverse(
             node.id, impact_edge_types, depth=10, max_nodes=200, direction="incoming"
         )
 
+        try:
+            outgoing = await self._graph.get_edges(node.id, direction="outgoing")
+        except (TypeError, NotImplementedError, AttributeError):
+            outgoing = []
+        soft_refs = [e.source_id for e in outgoing if getattr(e, "type", None) == EdgeType.REFERENCES]
+
         affected_files: list[str] = []
         affected_functions: list[str] = []
         for dep in dependents:
+            if dep.id == node.id:
+                continue
             if dep.file_path not in affected_files:
                 affected_files.append(dep.file_path)
-            affected_functions.append(dep.structural.name)
+            name = dep.structural.name
+            if name and name not in affected_functions:
+                affected_functions.append(name)
 
+        impact_count = len(affected_functions)
         severity = "low"
-        if len(dependents) > 10:
+        if impact_count > 10:
             severity = "high"
-        elif len(dependents) > 3:
+        elif impact_count > 3:
             severity = "medium"
 
         recommendations: list[str] = []
         if change_type == "signature_change":
-            recommendations.append(f"Update {len(dependents)} callers to match new signature")
+            recommendations.append(f"Update {impact_count} callers to match new signature")
         elif change_type == "delete":
-            recommendations.append(f"Remove or stub {len(dependents)} dependent references")
+            recommendations.append(f"Remove or stub {impact_count} dependent references")
+        if soft_refs:
+            recommendations.append(
+                f"{len(soft_refs)} unresolved name reference(s) may also touch this symbol; verify before deleting"
+            )
 
         return {
             "affected_files": affected_files,
             "affected_functions": affected_functions,
             "impacted_nodes": affected_functions,
+            "soft_references": soft_refs,
             "severity": severity,
             "recommendations": recommendations,
         }
+
+    @staticmethod
+    def _present_terms(terms: list[str], hay: set[str]) -> list[str]:
+        """Distinct query terms present in a token haystack.
+
+        Exact token hits first, substring fallback (``term in token``) for
+        terms without one — the same outcome as the scan path's
+        ``t in hay or any(t in h for h in hay)`` test applied per term.
+        """
+        return [term for term in dict.fromkeys(terms) if term in hay or any(term in h for h in hay)]
+
+    @staticmethod
+    def _locate_hit(node: GraphNode, score: float, matched_on: str | None) -> dict[str, Any]:
+        """Result payload for one locate hit (exact codebase-memory parity keys)."""
+        return {
+            "entity": node.structural.name,
+            "id": node.id,
+            "file": node.file_path,
+            "file_path": node.file_path,
+            "type": node.type.value,
+            "matched_on": matched_on or "name",
+            "docstring": node.semantic.docstring,
+            "tags": list(node.semantic.tags),
+            "signature": node.structural.signature,
+            "start_line": node.structural.start_line,
+            "end_line": node.structural.end_line,
+            "lines": node.structural.lines,
+            "score": round(score, 2),
+        }
+
+    async def _get_corpus_cache(self) -> tuple[list[_CorpusRow], dict[str, float], float] | None:
+        """Return cached ``(rows, idf, avgdl)`` for the unrestricted graph, or ``None``.
+
+        ``rows`` are ``(node, fmap, hay_query, hay_all, length)`` tuples.
+
+        Semantics mirror ``bm25.build_corpus`` + :meth:`locate` +
+        :func:`bm25.rank` exactly: scores come from the full field map
+        (``fmap``), ``locate`` presence checks use the query-restricted
+        haystack (the five fields the scan path exposed), and pagination
+        totals use the all-fields haystack (``hay_all``). The cache
+        invalidates whenever ``graph.revision`` moves or the graph object is
+        replaced. Non-revision stores return ``None``; graphs above
+        ``_corpus_cache_max_nodes`` also return ``None`` but leave an
+        empty-rows sentinel for this revision so the oversized check does not
+        redo the full ``find_nodes()`` on every query — callers then use the
+        classic per-query scan, as before this cache existed.
+        """
+        revision = getattr(self._graph, "revision", None)
+        if revision is None:
+            # Non-revision stores cannot invalidate the cache safely; use the
+            # classic per-query scan instead.
+            return None
+        graph_id = id(self._graph)
+        cached = self._corpus_cache
+        if cached is not None and cached[0] == graph_id and cached[1] == revision:
+            return cached[2], cached[3], cached[4]
+        # Revision mismatch (or first call): drop stale entries before
+        # rebuilding so a failed build can never serve earlier data.
+        self._corpus_cache = None
+
+        all_nodes = await self._graph.find_nodes()
+        if len(all_nodes) > self._corpus_cache_max_nodes:
+            # Oversized graph: cache an empty sentinel keyed on this revision
+            # so the materialization probe runs once per revision, not per query.
+            self._corpus_cache = (graph_id, revision, [], {}, 0.0)
+            return None
+
+        from smp.engine.bm25 import FIELD_WEIGHTS, _field_tokens, idf_map
+
+        rows: list[_CorpusRow] = []
+        doc_freq: dict[str, int] = {}
+        doc_count = max(1, len(all_nodes))
+        for node in all_nodes:
+            fmap = _field_tokens(node)
+            length = 0.0
+            hay_all: set[str] = set()
+            seen: set[str] = set()
+            for field, toks in fmap.items():
+                length += len(toks) * FIELD_WEIGHTS.get(field, 1.0)
+                hay_all.update(toks)
+                seen.update(toks)
+            # Document frequency is counted once per doc over the union of
+            # all fields, exactly like bm25.build_corpus's per-doc ``seen``
+            # set (cross-field token repeats must not inflate df/IDF).
+            for term in seen:
+                doc_freq[term] = doc_freq.get(term, 0) + 1
+            # ``locate`` presence haystack: the five fields the scan path
+            # exposed (requested fields ∪ {name, id, file_path}); totals in
+            # locate_paged use the all-fields set instead.
+            hay_query: set[str] = set()
+            for field in ("name", "docstring", "tags", "id", "file_path"):
+                hay_query.update(fmap.get(field, ()))
+            rows.append((node, fmap, hay_query, hay_all, length))
+
+        idf = idf_map(doc_freq, doc_count)
+        # Raw-length average mirrors build_corpus: empty docs keep 0.0 here;
+        # the ``or 1.0`` doc-length floor is applied where score_node is
+        # called, exactly as the scan path does.
+        avgdl = (sum(row[4] for row in rows) / max(1, len(rows))) or 1.0
+        self._corpus_cache = (graph_id, revision, rows, idf, avgdl)
+        return rows, idf, avgdl
 
     async def locate(
         self,
@@ -652,23 +882,73 @@ class DefaultQueryEngine:
         offset: int = 0,
         match: str = "any",
     ) -> list[dict[str, Any]]:
-        from smp.engine.bm25 import build_corpus, score_node, tokenize_query
+        from smp.engine.bm25 import score_node, tokenize_query
 
         if not fields:
             fields = ["name", "docstring", "tags"]
+        use_field_set = set(fields) | {"name", "id", "file_path"}
 
+        # Fast path: the default field set over the whole graph served from
+        # the warm corpus cache (see :meth:`_get_corpus_cache`). Scoring and
+        # presence semantics are identical to the classic scan below — the
+        # cache only removes the per-query find_nodes() + build_corpus()
+        # rebuild, which measured 1.5 s p50 per smp_locate call on a
+        # 4.5k-node graph. Type-filtered or custom-field queries, oversized
+        # graphs, and non-revision stores fall through to the scan.
+        if (
+            not node_types
+            and fields == ["name", "docstring", "tags"]
+            and use_field_set == {"name", "docstring", "tags", "id", "file_path"}
+        ):
+            cached = await self._get_corpus_cache()
+            if cached is not None and cached[0]:
+                rows, idf, avgdl = cached
+                terms = tokenize_query(query) or [t.lower() for t in query.split() if t]
+                if not terms:
+                    return []
+                distinct = list(dict.fromkeys(terms))
+                raw = query.lower()
+                scored: list[tuple[float, dict[str, Any]]] = []
+                for node, fmap, hay_query, _hay_all, length in rows:
+                    # Presence per term: exact token hit first, substring
+                    # fallback for terms without one — the same result as the
+                    # scan's "t in hay or any(t in h)" test per term.
+                    present = self._present_terms(distinct, hay_query)
+                    if match == "all" and len(present) < len(distinct):
+                        continue
+                    if not present:
+                        continue
+                    score, matched_on = score_node(terms, fmap, idf, avgdl, length or 1.0)
+                    if raw == node.structural.name.lower():
+                        score += 100.0
+                        matched_on = "name (exact)"
+                    if score > 0:
+                        scored.append((score, self._locate_hit(node, score, matched_on)))
+                scored.sort(key=lambda x: -x[0])
+                page = scored[offset : offset + top_k] if top_k > 0 else scored[offset:]
+                return [hit for _score, hit in page]
+            # Empty cache (sentinel for an oversized graph): fall through to
+            # the classic scan below.
+
+        # Classic scan: query-time corpus build, as before the cache existed
+        # (kept verbatim so behavior is unchanged for every non-fast case).
         all_nodes = await self._graph.find_nodes()
         candidates = [n for n in all_nodes if not node_types or n.type.value in node_types]
         terms = tokenize_query(query) or [t.lower() for t in query.split() if t]
         if not terms or not candidates:
             return []
 
+        from smp.engine.bm25 import build_corpus
+
         doc_fields, idf, avgdl = build_corpus(candidates)
-        scored: list[tuple[float, dict[str, Any]]] = []
+        # Same shape as the fast path's ``scored``; no re-annotation so mypy
+        # sees a single binding for the method.
+        scored = []
         for node, fmap in zip(candidates, doc_fields, strict=True):
-            # Restrict to requested fields when possible.
+            # Restrict the presence haystack to requested fields ∪ {name,
+            # id, file_path}; scoring still uses the full field map.
             hay_tokens: set[str] = set()
-            use_fields = {k: v for k, v in fmap.items() if k in set(fields) | {"name", "id", "file_path"}}
+            use_fields = {k: v for k, v in fmap.items() if k in use_field_set}
             for toks in use_fields.values():
                 hay_tokens.update(toks)
             present = [t for t in terms if t in hay_tokens or any(t in h for h in hay_tokens)]
@@ -683,30 +963,11 @@ class DefaultQueryEngine:
                 score += 100.0
                 matched_on = "name (exact)"
             if score > 0:
-                scored.append(
-                    (
-                        score,
-                        {
-                            "entity": node.structural.name,
-                            "id": node.id,
-                            "file": node.file_path,
-                            "file_path": node.file_path,
-                            "type": node.type.value,
-                            "matched_on": matched_on or "name",
-                            "docstring": node.semantic.docstring,
-                            "tags": list(node.semantic.tags),
-                            "signature": node.structural.signature,
-                            "start_line": node.structural.start_line,
-                            "end_line": node.structural.end_line,
-                            "lines": node.structural.lines,
-                            "score": round(score, 2),
-                        },
-                    )
-                )
+                scored.append((score, self._locate_hit(node, score, matched_on)))
 
         scored.sort(key=lambda x: -x[0])
         page = scored[offset : offset + top_k] if top_k > 0 else scored[offset:]
-        return [item[1] for item in page]
+        return [hit for _score, hit in page]
 
     async def locate_paged(
         self,
@@ -717,7 +978,52 @@ class DefaultQueryEngine:
         offset: int = 0,
         match: str = "any",
     ) -> dict[str, Any]:
-        """Locate with pagination metadata (codebase-memory parity)."""
+        """Locate with pagination metadata (codebase-memory parity).
+
+        On the default-field fast path the page comes from :meth:`locate`
+        (warm cache) and ``total`` is computed from the same cached rows
+        using the all-fields presence semantics of ``bm25.rank`` — exactly
+        what ``count_matches`` produces for the classic path, minus its
+        second full-graph materialization and corpus rebuild.
+        """
+        if not node_types and (not fields or fields == ["name", "docstring", "tags"]):
+            from smp.engine.bm25 import score_node, tokenize_query
+
+            cached = await self._get_corpus_cache()
+            if cached is not None and cached[0]:
+                rows, idf, avgdl = cached
+                terms = tokenize_query(query) or [t.lower() for t in query.split() if t]
+                raw = query.lower()
+                # Total mirrors bm25.rank()/count_matches exactly over the
+                # all-fields haystack: presence/match filter, the +20 phrase
+                # bonus (raw == name, or raw substring of id), score > 0 gate.
+                total = 0
+                if terms:
+                    distinct = list(dict.fromkeys(terms))
+                    for node, fmap, _hay_query, hay_all, length in rows:
+                        present = self._present_terms(distinct, hay_all)
+                        if match == "all" and len(present) < len(distinct):
+                            continue
+                        if not present:
+                            continue
+                        score, _matched_on = score_node(terms, fmap, idf, avgdl, length or 1.0)
+                        if raw and (raw == node.structural.name.lower() or raw in node.id.lower()):
+                            score += 20.0
+                        if score > 0:
+                            total += 1
+                matches = await self.locate(query, fields, node_types, top_k, offset, match)
+                has_more = offset + len(matches) < total
+                return {
+                    "matches": matches,
+                    "total": total,
+                    "returned": len(matches),
+                    "offset": offset,
+                    "has_more": has_more,
+                    "next_offset": offset + len(matches) if has_more else None,
+                }
+
+        # Classic path: full rank() pass for the total, then locate (verbatim
+        # pre-cache behavior for custom fields/types / oversized graphs).
         from smp.engine.bm25 import count_matches
 
         all_nodes = await self._graph.find_nodes()
@@ -812,16 +1118,44 @@ class DefaultQueryEngine:
         * ``compact`` — symbols with file + lines (default, ~500 tokens).
         * ``full`` — compact plus bounded source snippets.
         * ``files`` — de-duplicated file paths only.
+
+        Adds codebase-memory observability: ``elapsed_ms``, ``dedup_ratio``,
+        ``directories``, ``total_relation``, ``total_grep_matches``.
         """
+        import time as _time
+
+        started = _time.perf_counter()
         paged = await self.locate_paged(query, node_types=node_types, top_k=top_k, offset=offset, match=match)
         matches = paged["matches"]
+        total = int(paged.get("total", len(matches)))
+        # Directory breakdown + dedup ratio (matches vs distinct files).
+        directories: dict[str, int] = {}
+        for m in matches:
+            fp = str(m.get("file_path") or m.get("file", "") or "")
+            key = fp.split("/")[0] if "/" in fp else (fp.rsplit(".", 1)[-1] if "." in fp else "(root)")
+            directories[key] = directories.get(key, 0) + 1
+        distinct_files = len({str(m.get("file_path") or m.get("file", "")) for m in matches} or set())
+        dedup_ratio = round(len(matches) / max(1, distinct_files), 2) if matches else 1.0
+        elapsed_ms = round((_time.perf_counter() - started) * 1000.0, 2)
+        base = {
+            **paged,
+            "elapsed_ms": elapsed_ms,
+            "dedup_ratio": f"{dedup_ratio}x",
+            "directories": directories,
+            "directories_total": len(directories),
+            "total_relation": "eq",
+            "total_grep_matches": total,
+            "total_results": total,
+            "truncated": bool(paged.get("has_more")),
+            "truncation_reason": "page_limit" if paged.get("has_more") else None,
+        }
         if mode == "files":
             seen: list[str] = []
             for m in matches:
                 fp = m.get("file_path") or m.get("file", "")
                 if fp and fp not in seen:
                     seen.append(fp)
-            return {**paged, "mode": mode, "files": seen}
+            return {**base, "mode": mode, "files": seen}
         if mode == "full":
             enriched: list[dict[str, Any]] = []
             for m in matches:
@@ -833,8 +1167,8 @@ class DefaultQueryEngine:
                         node.file_path, node.structural.start_line, node.structural.end_line, max_lines=40
                     )
                 enriched.append({**m, "snippet": snippet})
-            return {**paged, "mode": mode, "matches": enriched}
-        return {**paged, "mode": "compact"}
+            return {**base, "mode": mode, "matches": enriched}
+        return {**base, "mode": "compact"}
 
     async def file_outline(self, file_path: str, limit: int = 200, offset: int = 0) -> dict[str, Any]:
         """Declaration outline for one file (codebase-memory ``get_file_outline`` parity)."""
@@ -977,15 +1311,30 @@ class DefaultQueryEngine:
                 lname = (n.structural.name or "").lower()
                 if lname in {"main", "__main__", "__init__"} or lname.startswith("test_"):
                     continue
+            if n.type.value == "Class":
+                # A class declaring base classes is used polymorphically
+                # (ABC implementations, framework subclassing, msgspec.Struct
+                # params classes). The inheritance edge may not resolve to a
+                # graph node, but the declaration itself is evidence against
+                # deadness. Signatures carry bases as "class Foo(Bar, ...)".
+                # an empty "class Foo()" declares none.
+                sig = n.structural.signature or ""
+                open_paren = sig.find("(")
+                if open_paren != -1 and sig[open_paren + 1 :].lstrip()[:1] not in ("", ")"):
+                    continue
             try:
                 outs = await self._graph.get_edges(n.id, direction="outgoing")
                 ins = await self._graph.get_edges(n.id, direction="incoming")
             except (NotImplementedError, AttributeError):
                 continue
-            # File nodes carry DEFINES edges by construction; only flag
-            # truly isolated symbols (DEFINES-only incoming still counts as dead).
-            non_defines_in = [e for e in ins if e.type != EdgeType.DEFINES]
-            if not outs and not non_defines_in and n.type.value in code_types:
+            # File nodes carry DEFINES edges by construction, and members
+            # carry CONTAINS edges from their parent scope; neither is
+            # *usage*. Only flag symbols with no incoming usage edge
+            # (CALLS/IMPORTS/INHERITS/...) and no outgoing usage edges
+            # (outgoing CONTAINS just means "has members", not "is used").
+            non_usage_in = [e for e in ins if e.type not in (EdgeType.DEFINES, EdgeType.CONTAINS)]
+            usage_outs = [e for e in outs if e.type != EdgeType.CONTAINS]
+            if not usage_outs and not non_usage_in and n.type.value in code_types:
                 dead.append(self._node_to_dict(n))
         # Deterministic order (file, line) instead of ingestion order.
         dead.sort(key=lambda d: (d.get("file_path", ""), d.get("start_line", 0), d.get("name", "")))
@@ -1077,21 +1426,57 @@ class DefaultQueryEngine:
             }
 
         best_path = paths[0]
-        path_nodes = []
-        for nid in best_path:
+        names: dict[str, str] = {}
+        types: dict[str, str] = {}
+        for nid, _edge in best_path:
             node = await self._graph.get_node(nid)
             if node:
-                path_nodes.append({"node": node.structural.name, "type": node.type.value})
+                names[nid] = node.structural.name
+                types[nid] = node.type.value
+        path_nodes = [{"node": names[nid], "type": types[nid]} for nid, _edge in best_path if nid in names]
 
+        # Render each hop in true stored-edge direction: a "reverse" hop
+        # means traversal ran against the edge (callee -> caller), so the
+        # arrow points from the edge's source to its target.
+        hops: list[dict[str, str]] = []
         transformations: list[str] = []
-        for i in range(len(path_nodes) - 1):
-            transformations.append(f"{path_nodes[i]['node']} → {path_nodes[i + 1]['node']}")
+        for i in range(len(best_path) - 1):
+            frm, _ = best_path[i]
+            to, edge = best_path[i + 1]
+            if edge is None or edge.source_id == frm:
+                orientation = "forward"
+                hops.append(
+                    {
+                        "from": names.get(frm, frm),
+                        "to": names.get(to, to),
+                        "edge_type": edge.type.value if edge else "unknown",
+                        "orientation": orientation,
+                    }
+                )
+                transformations.append(f"{names.get(frm, frm)} → {names.get(to, to)}")
+            else:
+                orientation = "reverse"
+                hops.append(
+                    {
+                        "from": names.get(frm, frm),
+                        "to": names.get(to, to),
+                        "edge_type": edge.type.value,
+                        "orientation": orientation,
+                    }
+                )
+                transformations.append(f"{names.get(frm, frm)} ← {names.get(to, to)} (reverse {edge.type.value})")
 
         return {
             "path": path_nodes,
             "data_transformations": transformations,
+            "hops": hops,
             "found": True,
             "direction": direction_used,
+            "traversal_note": (
+                "'direction' records which edge orientation the BFS followed from "
+                "'start': 'outgoing' hops run caller → callee; 'incoming' hops run "
+                "callee → caller (rendered with ← and marked reverse); 'both' mixes them."
+            ),
         }
 
     async def _bfs_paths(
@@ -1100,48 +1485,59 @@ class DefaultQueryEngine:
         end_id: str,
         edge_types: list[EdgeType],
         direction: str = "outgoing",
-    ) -> list[list[str]]:
-        """BFS to find shortest paths following specific edge types."""
-        found_paths: list[list[str]] = []
-        queue: deque[tuple[str, list[str]]] = deque([(start_id, [start_id])])
+    ) -> list[list[tuple[str, GraphEdge | None]]]:
+        """BFS to find shortest paths following specific edge types.
+
+        Returns paths as ``[(node_id, edge)]`` where ``edge`` is the stored
+        edge traversed to arrive at ``node_id`` (``None`` for the start
+        node). Callers use the edge's stored ``source_id``/``target_id`` to
+        report hop orientation precisely instead of assuming path order
+        equals edge direction. Bounded: at most ``max_paths`` paths of at
+        most ``max_depth`` hops.
+        """
+        found_paths: list[list[tuple[str, GraphEdge | None]]] = []
+        queue: deque[list[tuple[str, GraphEdge | None]]] = deque([[(start_id, None)]])
         visited: set[str] = {start_id}
         max_depth = 10
         max_paths = 5
 
         while queue and len(found_paths) < max_paths:
-            current, path = queue.popleft()
+            path = queue.popleft()
+            current = path[-1][0]
             if len(path) > max_depth:
                 continue
 
             # Get edges in the specified direction
             edges = await self._graph.get_edges(current, edge_type=None, direction=direction)
 
-            # Filter edges by type
-            filtered_edges = [e for e in edges if e.type in edge_types]
-
-            neighbors: set[str] = set()
-            for e in filtered_edges:
+            # Filter edges by type; keep the traversed edge per neighbor so
+            # orientation survives (first edge wins, deterministic order).
+            hops: dict[str, GraphEdge] = {}
+            for e in sorted(edges, key=lambda e: (e.target_id, e.source_id, e.type.value)):
+                if e.type not in edge_types:
+                    continue
                 # Outgoing follows source -> target; incoming follows
                 # target -> source; both follows either endpoint.
                 if direction == "outgoing":
                     if e.source_id == current:
-                        neighbors.add(e.target_id)
+                        hops.setdefault(e.target_id, e)
                 elif direction == "incoming":
                     if e.target_id == current:
-                        neighbors.add(e.source_id)
+                        hops.setdefault(e.source_id, e)
                 else:  # both
                     if e.source_id == current:
-                        neighbors.add(e.target_id)
+                        hops.setdefault(e.target_id, e)
                     elif e.target_id == current:
-                        neighbors.add(e.source_id)
+                        hops.setdefault(e.source_id, e)
 
-            for neighbor in neighbors:
+            for neighbor in sorted(hops):
+                edge = hops[neighbor]
                 if neighbor == end_id:
-                    found_paths.append(path + [neighbor])
+                    found_paths.append([*path, (neighbor, edge)])
                     continue
-                if neighbor not in visited and neighbor not in path:
+                if neighbor not in visited and all(nid != neighbor for nid, _ in path):
                     visited.add(neighbor)
-                    queue.append((neighbor, path + [neighbor]))
+                    queue.append([*path, (neighbor, edge)])
 
         return found_paths
 
@@ -1562,3 +1958,432 @@ class DefaultQueryEngine:
             "overlapping_files": [],
             "conflicting_nodes": [],
         }
+
+    async def query_graph(
+        self,
+        query: str,
+        max_rows: int = 200,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """Read-only graph query — codebase-memory ``query_graph`` parity.
+
+        Accepts a safe Cypher subset::
+
+            MATCH (n:Label {name: 'x'}) WHERE n.name CONTAINS 'y'
+              AND n.file_path CONTAINS 'z' RETURN n.name, n.file_path LIMIT N
+
+        Supported: single-node ``MATCH`` with optional label, inline
+        ``{name: 'x'}`` / ``{file: 'x'}`` map filters, a ``WHERE`` clause of
+        ``AND``-ed atomic predicates (``CONTAINS`` / ``=`` / ``!=`` /
+        ``STARTS WITH`` / ``ENDS WITH`` over ``name`` / ``file_path`` /
+        ``file`` / ``type``), a ``RETURN`` projection over the same
+        properties (plus ``id``/``qn``), and ``LIMIT N``. Plain ``name`` /
+        ``file`` text is also accepted. Anything outside this grammar is
+        never silently dropped: it is reported in ``warnings`` (and
+        ``unsupported``) while the supported remainder still executes.
+        Only filters and projects; never mutates. Returns
+        ``columns``/``rows`` with pagination metadata and ``elapsed_ms``
+        for audit transparency.
+        """
+        import re as _re
+        import time as _time
+
+        started = _time.perf_counter()
+        raw = (query or "").strip()
+        label: str | None = None
+        name_filter: str | None = None
+        file_filter: str | None = None
+        limit = max_rows
+        warnings: list[str] = []
+        unsupported: list[str] = []
+        # Compiled WHERE predicates: (prop, op, literal). Evaluated per
+        # node in a single pass — O(nodes x predicates).
+        where_predicates: list[tuple[str, str, str]] = []
+        # RETURN projection: list of property names, or None for default.
+        projection: list[str] | None = None
+
+        m_label = _re.search(r"MATCH\s*\(\s*\w+\s*(?::\s*(\w+))?", raw, _re.IGNORECASE)
+        if m_label and m_label.group(1):
+            label = m_label.group(1)
+        m_name = _re.search(r"name\s*:\s*['\"]([^'\"]+)['\"]", raw)
+        if m_name:
+            name_filter = m_name.group(1)
+        m_file = _re.search(r"file\s*:\s*['\"]([^'\"]+)['\"]", raw)
+        if m_file:
+            file_filter = m_file.group(1)
+        # WHERE clause: capture text between WHERE and the next top-level
+        # keyword (RETURN / LIMIT / ORDER BY) or end of string.
+        m_where = _re.search(
+            r"\bWHERE\b(.*?)(?=\bRETURN\b|\bLIMIT\b|\bORDER\s+BY\b|\bSKIP\b|$)",
+            raw,
+            _re.IGNORECASE | _re.DOTALL,
+        )
+        if m_where:
+            where_text = m_where.group(1).strip()
+            if where_text:
+                parts = _re.split(r"\bAND\b", where_text, flags=_re.IGNORECASE)
+                for part in parts:
+                    atom = part.strip()
+                    if not atom:
+                        continue
+                    m_pred = _re.match(
+                        r"(?:\w+\.)?(name|file_path|file|type)\s*"
+                        r"(CONTAINS|STARTS\s+WITH|ENDS\s+WITH|!=|<>|=)\s*"
+                        r"['\"]([^'\"]*)['\"]\s*$",
+                        atom,
+                        _re.IGNORECASE,
+                    )
+                    if m_pred:
+                        prop = m_pred.group(1).lower()
+                        op = _re.sub(r"\s+", " ", m_pred.group(2).upper())
+                        if prop == "file":
+                            prop = "file_path"
+                        where_predicates.append((prop, op, m_pred.group(3)))
+                    else:
+                        unsupported.append(atom)
+                if unsupported:
+                    warnings.append(
+                        "WHERE supports only AND-ed atomic predicates "
+                        "(<alias>.<prop> <op> '<literal>' with op in "
+                        "CONTAINS/= /!=/STARTS WITH/ENDS WITH over "
+                        "name/file_path/type); ignored: " + "; ".join(unsupported)
+                    )
+        # RETURN projection over node properties (id/qn/name/file_path/file/type).
+        m_return = _re.search(
+            r"\bRETURN\b(.*?)(?=\bLIMIT\b|\bORDER\s+BY\b|\bSKIP\b|$)",
+            raw,
+            _re.IGNORECASE | _re.DOTALL,
+        )
+        if m_return:
+            return_text = m_return.group(1).strip()
+            if return_text and return_text != "*":
+                cols: list[str] = []
+                for item in return_text.split(","):
+                    col = item.strip()
+                    m_col = _re.match(r"(?:\w+\.)?(id|qn|name|file_path|file|type)$", col, _re.IGNORECASE)
+                    if m_col:
+                        col_prop = m_col.group(1).lower()
+                        if col_prop == "qn":
+                            col_prop = "id"
+                        elif col_prop == "file":
+                            col_prop = "file_path"
+                        cols.append(col_prop)
+                    elif col:
+                        unsupported.append(f"RETURN {col}")
+                if cols:
+                    projection = cols
+                if any(u.startswith("RETURN ") for u in unsupported):
+                    warnings.append(
+                        "RETURN supports only id/qn/name/file_path/file/type properties; ignored: "
+                        + "; ".join(u for u in unsupported if u.startswith("RETURN "))
+                    )
+        # Flag other Cypher surface we deliberately do not execute.
+        for kw_pat, kw_name in (
+            (r"-\s*\[.*?\]\s*[-<>]", "relationship pattern"),
+            (r"\bORDER\s+BY\b", "ORDER BY"),
+            (r"\bSKIP\b", "SKIP"),
+            (r"\b(COUNT|SUM|AVG|MIN|MAX|COLLECT)\s*\(", "aggregation"),
+            (r"\bOR\b", "OR"),
+        ):
+            if _re.search(kw_pat, raw, _re.IGNORECASE):
+                unsupported.append(kw_name)
+                warnings.append(f"{kw_name} is not supported and was ignored; results may be wider than asked.")
+        m_limit = _re.search(r"LIMIT\s+(\d+)", raw, _re.IGNORECASE)
+        if m_limit:
+            try:
+                limit = min(int(m_limit.group(1)), max_rows)
+            except ValueError:
+                limit = max_rows
+        # Plain-text fallback: treat the whole query as a name fragment
+        # when no MATCH clause was found.
+        if not raw.upper().startswith("MATCH") and not name_filter and not file_filter:
+            if "/" in raw or raw.endswith(".py"):
+                file_filter = raw
+            elif raw:
+                name_filter = raw
+
+        nodes = await self._graph.find_nodes()
+        filtered: list[GraphNode] = []
+        for n in nodes:
+            if label and n.type.value.lower() != label.lower():
+                continue
+            if (
+                name_filter
+                and name_filter.lower() not in (n.structural.name or "").lower()
+                and name_filter.lower() not in n.id.lower()
+            ):
+                continue
+            if file_filter and file_filter not in (n.file_path or ""):
+                continue
+            if where_predicates and not self._match_where_predicates(n, where_predicates):
+                continue
+            filtered.append(n)
+        filtered.sort(key=lambda n: (n.file_path, n.structural.start_line, n.id))
+        total = len(filtered)
+        page = filtered[offset : offset + limit] if limit > 0 else filtered[offset:]
+        rows = [self._project_node(n, projection) for n in page]
+        elapsed_ms = round((_time.perf_counter() - started) * 1000.0, 2)
+        has_more = offset + len(page) < total
+        columns = ["qn", "file"] if projection is None else [("qn" if c == "id" else c) for c in projection]
+        return {
+            "columns": columns,
+            "rows": rows,
+            "returned": len(page),
+            "total": total,
+            "total_relation": "eq",
+            "has_more": has_more,
+            "truncated": has_more,
+            "truncation_reason": "page_limit" if has_more else None,
+            "elapsed_ms": elapsed_ms,
+            "warnings": warnings,
+            "unsupported": unsupported,
+        }
+
+    @staticmethod
+    def _match_where_predicates(node: GraphNode, predicates: list[tuple[str, str, str]]) -> bool:
+        """Evaluate compiled WHERE predicates against one node (AND semantics)."""
+        for prop, op, literal in predicates:
+            if prop == "name":
+                value = node.structural.name or ""
+            elif prop == "file_path":
+                value = node.file_path or ""
+            elif prop == "type":
+                value = node.type.value or ""
+            else:
+                return False
+            if op == "CONTAINS":
+                if literal.lower() not in value.lower():
+                    return False
+            elif op == "=":
+                if value.lower() != literal.lower():
+                    return False
+            elif op in ("!=", "<>"):
+                if value.lower() == literal.lower():
+                    return False
+            elif op == "STARTS WITH":
+                if not value.lower().startswith(literal.lower()):
+                    return False
+            elif op == "ENDS WITH":
+                if not value.lower().endswith(literal.lower()):
+                    return False
+            else:
+                return False
+        return True
+
+    @staticmethod
+    def _project_node(node: GraphNode, projection: list[str] | None) -> list[str]:
+        """Project a node onto the RETURN column list (default: id + file)."""
+        if projection is None:
+            return [node.id, node.file_path]
+        row: list[str] = []
+        for col in projection:
+            if col == "id":
+                row.append(node.id)
+            elif col == "name":
+                row.append(node.structural.name or "")
+            elif col == "file_path":
+                row.append(node.file_path)
+            elif col == "type":
+                row.append(node.type.value)
+            else:
+                row.append("")
+        return row
+
+    async def get_code_snippet(
+        self,
+        qualified_name: str,
+        source_mode: str = "auto",
+        max_lines: int = 500,
+    ) -> dict[str, Any]:
+        """Code snippet reader — codebase-memory ``get_code_snippet`` parity.
+
+        Resolves an exact id, structural name, or id fragment, then returns
+        bounded source plus caller/callee fan-in/fan-out (capped lists) and a
+        best-effort coverage note. ``source_mode``: ``auto`` (outline large
+        containers), ``full`` (up to *max_lines*), ``outline`` (members only).
+        """
+        node_id = await self._resolve_node_id(qualified_name)
+        node = await self._graph.get_node(node_id) if node_id else None
+        if node is None:
+            candidates = await self._graph.find_nodes(name=qualified_name)
+            node = candidates[0] if candidates else None
+        if node is None:
+            return {
+                "error": "function not found",
+                "function_name": qualified_name,
+                "hint": "Use smp/locate(name_pattern=...) to find the exact id, then pass it here.",
+            }
+        mode = (source_mode or "auto").lower()
+        if mode not in ("auto", "full", "outline"):
+            mode = "auto"
+        span = max(0, node.structural.end_line - node.structural.start_line + 1)
+        if mode == "auto" and span > 200:
+            source = ""
+            outline: list[dict[str, Any]] = []
+            try:
+                children = await self._graph.get_edges(node.id, direction="outgoing")
+                for e in children[:50]:
+                    child = await self._graph.get_node(e.target_id)
+                    if child is not None:
+                        outline.append(
+                            {
+                                "name": child.structural.name,
+                                "type": child.type.value,
+                                "lines": f"{child.structural.start_line}-{child.structural.end_line}",
+                            }
+                        )
+            except (NotImplementedError, AttributeError):
+                outline = []
+            source_text: str | list[dict[str, Any]] = outline
+        elif mode == "outline":
+            source_text = ""
+            try:
+                members = await self._graph.get_edges(node.id, direction="outgoing")
+                member_list: list[dict[str, Any]] = []
+                for e in members[:100]:
+                    child = await self._graph.get_node(e.target_id)
+                    if child is not None:
+                        member_list.append(
+                            {
+                                "name": child.structural.name,
+                                "type": child.type.value,
+                                "lines": f"{child.structural.start_line}-{child.structural.end_line}",
+                            }
+                        )
+                source_text = member_list
+            except (NotImplementedError, AttributeError):
+                source_text = []
+            source = source_text  # type: ignore[assignment]
+        else:
+            cap = max(1, min(max_lines, 2000))
+            source = self._read_snippet(
+                node.file_path, node.structural.start_line, node.structural.end_line, max_lines=cap
+            )
+        try:
+            incoming = await self._graph.get_edges(node.id, direction="incoming")
+            outgoing = await self._graph.get_edges(node.id, direction="outgoing")
+        except (NotImplementedError, AttributeError):
+            incoming, outgoing = [], []
+        callers = [e.source_id for e in incoming if e.type == EdgeType.CALLS][:20]
+        callees = [e.target_id for e in outgoing if e.type == EdgeType.CALLS][:20]
+        caller_total = len([e for e in incoming if e.type == EdgeType.CALLS])
+        callee_total = len([e for e in outgoing if e.type == EdgeType.CALLS])
+        return {
+            "name": node.structural.name,
+            "qualified_name": node.id,
+            "label": node.type.value,
+            "file_path": node.file_path,
+            "start_line": node.structural.start_line,
+            "end_line": node.structural.end_line,
+            "source_mode": mode,
+            "source": source,
+            "callers": caller_total,
+            "callees": callee_total,
+            "caller_list": callers,
+            "callee_list": callees,
+            "coverage_note": ("Best-effort snippet; caller/callee counts reflect indexed CALLS edges only."),
+        }
+
+    async def detect_changes(
+        self,
+        base_branch: str = "main",
+        depth: int = 1,
+        direction: str = "both",
+        limit: int = 50,
+        scope: str = "files",
+    ) -> dict[str, Any]:
+        """Git-aware change map — codebase-memory ``detect_changes`` parity.
+
+        Diffs ``base_branch...HEAD`` for changed files, maps them to seed
+        symbols in the graph, then traverses *depth* hops in *direction* to
+        report impacted nodes. Never claims completeness outside git.
+        """
+        import subprocess as _sp
+
+        norm = {"inbound": "incoming", "outbound": "outgoing"}.get(direction, direction)
+        if norm not in ("incoming", "outgoing", "both"):
+            norm = "both"
+        changed_files: list[str] = []
+        merge_base: str | None = None
+        note: str | None = None
+        try:
+            mb = _sp.run(
+                ["git", "merge-base", base_branch, "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if mb.returncode == 0:
+                merge_base = mb.stdout.strip() or None
+            diff = _sp.run(
+                ["git", "diff", "--name-only", f"{base_branch}...HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            if diff.returncode == 0:
+                changed_files = sorted(line.strip() for line in diff.stdout.splitlines() if line.strip())
+            else:
+                note = (diff.stderr or "").strip()[:200] or "git diff failed"
+        except (OSError, ValueError, _sp.SubprocessError) as exc:
+            note = str(exc)[:200]
+        if scope != "files":
+            # Impact scope requested: keep file list but flag it.
+            note = (note + "; " if note else "") + f"scope={scope} (file seeds shown)"
+        seed_ids: list[str] = []
+        for fp in changed_files:
+            try:
+                for n in await self._graph.find_nodes(file_path=fp):
+                    seed_ids.append(n.id)
+            except (NotImplementedError, AttributeError):
+                continue
+            if len(seed_ids) >= limit * 4:
+                break
+        # Fallback: basename match when stored paths are absolute.
+        if not seed_ids:
+            try:
+                all_nodes = await self._graph.find_nodes()
+                for fp in changed_files:
+                    base = fp.rsplit("/", 1)[-1]
+                    for n in all_nodes:
+                        if n.file_path.endswith(base) or base in n.file_path:
+                            seed_ids.append(n.id)
+                            if len(seed_ids) >= limit * 4:
+                                break
+            except (NotImplementedError, AttributeError):
+                pass
+        impacted: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for sid in seed_ids[:limit]:
+            try:
+                hops = await self._graph.traverse(sid, EdgeType.CALLS, depth, max_nodes=limit, direction=norm)
+            except (NotImplementedError, AttributeError):
+                hops = []
+            for h in hops:
+                if h.id in seen or h.id in set(seed_ids):
+                    continue
+                seen.add(h.id)
+                impacted.append({"qn": h.id, "file": h.file_path, "name": h.structural.name})
+                if len(impacted) >= limit:
+                    break
+            if len(impacted) >= limit:
+                break
+        result: dict[str, Any] = {
+            "base": base_branch,
+            "merge_base": merge_base,
+            "direction": direction,
+            "changed_total": len(changed_files),
+            "changed_returned": len(changed_files[:limit]),
+            "changed_has_more": len(changed_files) > limit,
+            "changed_files": changed_files[:limit],
+            "seed_symbols": len(seed_ids),
+            "impacted_total": len(impacted),
+            "impacted_total_relation": "eq",
+            "impacted_shown": len(impacted),
+            "impacted": impacted,
+            "impacted_has_more": False,
+            "truncated": len(changed_files) > limit,
+        }
+        if note:
+            result["note"] = note
+        return result
