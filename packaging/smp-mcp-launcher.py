@@ -54,8 +54,7 @@ def main() -> None:
 
             stats = asyncio.run(ingest_directory(root, graph_path=graph))
             print(
-                f"smp-mcp: ingested {stats['files']} files, "
-                f"{stats['nodes']} nodes, {stats['errors']} errors",
+                f"smp-mcp: ingested {stats['files']} files, {stats['nodes']} nodes, {stats['errors']} errors",
                 file=sys.stderr,
             )
         except Exception as exc:  # keep serving with an empty graph
