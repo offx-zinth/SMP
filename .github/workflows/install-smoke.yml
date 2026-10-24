@@ -30,7 +30,7 @@ jobs:
         run: bash install.sh --global
 
       - name: CLI works
-        run: "$HOME/.local/bin/smp" --help
+        run: '"$HOME/.local/bin/smp" --help'
 
       - name: idempotent rerun
         env:

@@ -21,6 +21,7 @@ Example — see what tools a server exposes::
     python benchmarks/mcp_query_bench.py \
         --cmd "python -m smp.protocol.mcp" --tools "[]"
 """
+
 from __future__ import annotations
 
 import argparse
