@@ -182,39 +182,75 @@ All tools are prefixed `smp_` over MCP.
 
 ## Performance
 
-**Real measurements, same laptop for every tool** — 8-thread 11th-gen Intel
-i7-1165G7, 14 GB RAM, NVMe, Linux, no GPU. Each tool performed a fresh full
-index of the identical directory tree and served every query through its MCP
-server, driven by the same benchmark client.
+**Real measurements, one machine for every tool** — 8-thread 11th-gen Intel
+i7-1165G7, 14 GB RAM, NVMe, Linux, no GPU, no database, no embeddings. Every
+number below was measured on this same laptop in the same session; both tools
+performed a fresh full index of the identical directory tree and served every
+query through the same benchmark client. No vendor figures are mixed into the
+measured tables — the maintainer-reported run is called out separately.
 
 ### Indexing
 
 | Corpus | SMP | codebase-memory-mcp |
 |---|---|---|
-| Linux kernel snapshot — 95,937 files (72,171 source files parsed) | **2 min 51 s** — 839,516 nodes, 4,066,943 edges, 2.2 GB graph, 6.5 GB peak RAM | **13 min 14 s** — `fast` (structural) mode, 4.8 GB index |
-| Real Python repo — 208 files | **0.99 s** — 4,575 nodes, 18,862 edges | **5.27 s** |
+| Linux kernel snapshot — 95,937 files (72,171 source files parsed) — **headline run** | **2 min 51 s** — 839,516 nodes, 4,066,943 edges, 2.2 GB graph, 6.5 GB peak RAM | **13 min 14 s** — `fast` (structural) mode, 2,260,014 nodes, 8,850,374 edges, 4.8 GB index |
+| Real Python repo — 208 files | **0.99 s** — 4,575 nodes, 18,862 edges | **5.27 s** — 4,346 nodes, 22,002 edges |
 
 That is **4.6× faster** on the kernel corpus and **5.3× faster** on the small
-repo — same machine, same files, fresh indexes. Directory selection and graph
-models differ (codebase-memory-mcp skips gitignored paths and some vendor
-directories by design; SMP indexes the full tree), so node counts are not
-directly comparable — wall-clock on the same input is the headline.
+repo — same machine, same files, fresh indexes. For the kernel run,
+codebase-memory-mcp excluded 36 directories by design (gitignored and vendor
+paths); SMP indexes the full tree. Node and edge counts therefore describe
+different graph models and are not compared — wall-clock on the same input is
+the headline.
 
-### Queries (after indexing, warm cache)
+### Store micro-benchmark (60k nodes / 240k edges)
+
+Synthetic graph, no MCP overhead:
+`python benchmarks/benchmark_scale.py --nodes 60000 --depth 3`.
+
+| Operation | Result |
+|---|---|
+| 60,000 node upserts | 207 ms |
+| 240,000 edge upserts | 916 ms |
+| Point lookup | p50 0.000 ms, p95 0.001 ms |
+| Depth-3 BFS traversal | p50 0.057 ms, p95 0.084 ms |
+
+### MCP query latency (after indexing, warm cache)
+
+Measured over stdio through the server with
+`benchmarks/mcp_query_bench.py`, on the same machine as the indexing runs.
 
 | Operation | p50 | p95 |
 |---|---|---|
-| Point lookup (60k-node store micro-benchmark) | 0.000 ms | 0.001 ms |
-| Depth-3 traversal (BFS) | 0.057 ms | 0.084 ms |
-| `smp_locate` symbol search (4,575-node graph) | 40–85 ms | ≤ 90 ms |
+| `smp_locate` symbol search (4,575-node graph) — **after fix** | 40–85 ms | ≤ 90 ms |
+| `smp_locate` — before fix | 1,493 ms | — |
 | `smp_context` file context | 29.9 ms | 34.4 ms |
-| `smp_file_outline` | 9.3 ms | 10.0 ms |
+| `smp_file_outline` | 9.3 ms (later rerun: 7.36 ms) | 10.0 ms |
 
-`smp_locate` took **1,493 ms p50** on that graph before this release — it
-rebuilt the BM25 corpus on every query. The corpus is now cached per store
-revision (~15–37× faster) with byte-identical results, while still falling
-back cleanly for very large graphs. Structural queries read from the
-memory-mapped graph: memory cost is O(graph), not O(context).
+**The benchmark found a real regression.** `smp_locate` used to re-load every
+node and re-tokenize the entire BM25 corpus on every query — that is why it
+took 1,493 ms p50 on a 4,575-node graph, and why serving the full 839k-node
+kernel graph OOM-killed the GNOME desktop twice (systemd-oomd terminated the
+opencode session). The fix adds a monotonic store revision counter and an
+engine-side corpus cache (≤ 250k nodes; larger graphs take the original path),
+so results are byte-identical to the pre-fix code while `locate` drops to
+40–85 ms p50 — roughly **15–37× faster**. Covered by 9 new equivalence and
+invalidation tests; the affected suites are green (327+ tests). The over-cap
+fallback was exercised on a 17k-file / 295,078-node subset (above the 250k
+cache cap), and a stale hardcoded “medium corpus” check in the test suite was
+corrected.
+
+Structural queries read from the memory-mapped graph: memory cost is O(graph),
+not O(context).
+
+### Competitor install reality check
+
+- **cgraphy 0.1.2 (PyPI):** installed and launched, but could not finish
+  indexing a 215-file repo within a 5-minute timeout — recorded as a measured
+  data point, not extrapolated.
+- **Graphify:** not on PyPI and no public repository found at benchmark time,
+  so it stays qualitative in the matrix above; no synthetic timing was invented
+  for it.
 
 ### Maintainer-reported cross-hardware run
 
